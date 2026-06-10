@@ -100,6 +100,8 @@
             live = bubble('assistant', '');
           }
         }
+      } else if (ev.type === 'upload_progress') {
+        live.textContent = ev.note || '';
       } else if (ev.type === 'daemon_error') {
         live.textContent = '(agent error: ' + (ev.error || 'unknown') + ')';
       }

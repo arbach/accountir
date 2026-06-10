@@ -66,7 +66,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/chat/history", get(chat_history))
         .route(
             "/app/chat/upload",
-            post(chat_upload).layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
+            post(chat_upload).layer(axum::extract::DefaultBodyLimit::max(500 * 1024 * 1024)),
         )
         .route("/app/chat/clear", post(chat_clear_route))
         .route("/app/dashboard", get(dashboard))
@@ -1134,59 +1134,79 @@ async fn chat_upload(
         return (StatusCode::BAD_REQUEST, "no files in upload").into_response();
     }
 
-    // Extract each file; an unreadable one becomes a note for the agent rather
-    // than failing the whole batch. One shared text budget across all files.
-    const TOTAL_BUDGET: usize = 80_000;
-    let mut remaining = TOTAL_BUDGET;
-    let mut sections = String::new();
-    let mut extracted_any = false;
-    for (fname, bytes) in &files {
-        let res: Result<String, String> = if bytes.starts_with(b"%PDF") {
-            crate::plaid::statements::extract_text_or_ocr(bytes).await
-        } else if bytes.contains(&0) {
-            Err("unsupported binary format (only PDF and text/CSV are readable)".to_string())
-        } else {
-            Ok(String::from_utf8_lossy(bytes).to_string())
-        };
-        match res {
-            Ok(text) if !text.trim().is_empty() => {
-                let content: String = text.chars().take(remaining).collect();
-                let truncated = content.chars().count() < text.chars().count();
-                remaining = remaining.saturating_sub(content.chars().count());
-                extracted_any = true;
-                sections.push_str(&format!(
-                    "=== File: \"{fname}\"{} ===\n{content}\n=== End of \"{fname}\" ===\n\n",
-                    if truncated { " (truncated)" } else { "" }
-                ));
-            }
-            Ok(_) => sections
-                .push_str(&format!("=== File: \"{fname}\" — no text could be extracted ===\n\n")),
-            Err(e) => {
-                sections.push_str(&format!("=== File: \"{fname}\" — could not read: {e} ===\n\n"))
-            }
-        }
-    }
-    if !extracted_any {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "no text could be extracted from any of the files (only PDF and text/CSV are supported)",
-        )
-            .into_response();
+    if files.len() > 100 {
+        return (StatusCode::BAD_REQUEST, "at most 100 files per upload").into_response();
     }
 
-    let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
-    let agent_text = format!(
-        "[The user uploaded {} file(s) in chat: {}. Their extracted text follows.]\n\n{sections}\
-         [End of uploaded files. Briefly say what each file appears to contain, then ask what the \
-         user would like done with them — unless their intent is already clear from the conversation.]",
-        files.len(),
-        names.join(", "),
-    );
+    // Respond with the SSE stream IMMEDIATELY and extract inside it: OCR of a
+    // large scanned batch takes minutes, and the SSO proxy 502s any request
+    // that hasn't produced response headers within ~30s. Progress events keep
+    // the chat UI informed while extraction runs.
+    let names: Vec<String> = files.iter().map(|(n, _)| n.clone()).collect();
     let display = format!("📎 Uploaded: {}", names.join(", "));
-
     let (tx, rx) = tokio::sync::mpsc::channel::<serde_json::Value>(64);
     let pool = state.pool.clone();
     tokio::spawn(async move {
+        // One shared text budget across all files; an unreadable file becomes
+        // a note for the agent rather than failing the batch.
+        const TOTAL_BUDGET: usize = 300_000;
+        let mut remaining = TOTAL_BUDGET;
+        let mut sections = String::new();
+        let mut extracted_any = false;
+        let total = files.len();
+        for (i, (fname, bytes)) in files.iter().enumerate() {
+            let _ = tx
+                .send(serde_json::json!({
+                    "type": "upload_progress",
+                    "note": format!("Reading {fname} ({} of {total})…", i + 1),
+                }))
+                .await;
+            let res: Result<String, String> = if bytes.starts_with(b"%PDF") {
+                crate::plaid::statements::extract_text_or_ocr(bytes).await
+            } else if bytes.contains(&0) {
+                Err("unsupported binary format (only PDF and text/CSV are readable)".to_string())
+            } else {
+                Ok(String::from_utf8_lossy(bytes).to_string())
+            };
+            match res {
+                Ok(text) if !text.trim().is_empty() => {
+                    let content: String = text.chars().take(remaining).collect();
+                    let truncated = content.chars().count() < text.chars().count();
+                    remaining = remaining.saturating_sub(content.chars().count());
+                    extracted_any = true;
+                    sections.push_str(&format!(
+                        "=== File: \"{fname}\"{} ===\n{content}\n=== End of \"{fname}\" ===\n\n",
+                        if truncated { " (truncated — text budget exhausted)" } else { "" }
+                    ));
+                }
+                Ok(_) => sections.push_str(&format!(
+                    "=== File: \"{fname}\" — no text could be extracted ===\n\n"
+                )),
+                Err(e) => sections
+                    .push_str(&format!("=== File: \"{fname}\" — could not read: {e} ===\n\n")),
+            }
+        }
+        if !extracted_any {
+            let _ = tx
+                .send(serde_json::json!({
+                    "type": "daemon_error",
+                    "error": "no text could be extracted from any of the files (only PDF and text/CSV are supported)",
+                }))
+                .await;
+            return;
+        }
+        let _ = tx
+            .send(serde_json::json!({
+                "type": "upload_progress",
+                "note": format!("All {total} file(s) read — the agent is looking at them…"),
+            }))
+            .await;
+        let agent_text = format!(
+            "[The user uploaded {total} file(s) in chat: {}. Their extracted text follows.]\n\n{sections}\
+             [End of uploaded files. Briefly say what each file appears to contain, then ask what the \
+             user would like done with them — unless their intent is already clear from the conversation.]",
+            names.join(", "),
+        );
         if let Err(e) = crate::ai::agent::stream_turn_with_display(
             &pool, user.id, company_id, agent_text, display, tx,
         )

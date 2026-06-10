@@ -658,6 +658,7 @@
               line('assistant \u00b7 tool (' + (blk.name || '?') + ')', ''); live = line('assistant', '');
             }
           });
+        } else if (ev.type === 'upload_progress') { live.textContent = ev.note || '';
         } else if (ev.type === 'daemon_error') { live.textContent = '(agent error: ' + (ev.error || '?') + ')'; }
         msgs.appendChild(typing); msgs.scrollTop = msgs.scrollHeight;
       }
