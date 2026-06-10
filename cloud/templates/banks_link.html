@@ -29,9 +29,20 @@
         return;
       }
       linkToken = (await r.json()).link_token;
+      // Persist so /plaid/oauth-return can resume Link for OAuth banks (e.g. Chase).
+      try { localStorage.setItem('plaid_link_token', linkToken); } catch (e) {}
     } catch (e) {
       setStatus('Network error getting link token: ' + e.message, 'err');
       return;
+    }
+
+    function report(kind, err, meta) {
+      try {
+        fetch('/plaid/link-event', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Object.assign({ kind: kind }, err || {}, meta || {})),
+        });
+      } catch (e) {}
     }
 
     const handler = Plaid.create({
@@ -65,12 +76,16 @@
           setTimeout(() => { window.location = '/app/banks'; }, 800);
         } catch (e) { setStatus('Error saving: ' + e.message, 'err'); }
       },
-      onExit: (err) => {
+      onExit: (err, metadata) => {
+        report('exit', err, metadata);
         if (err) {
-          setStatus('Plaid Link exited: ' + (err.display_message || err.error_message || 'cancelled'), 'err');
+          setStatus('Plaid Link exited: ' + (err.display_message || err.error_message || err.error_code || 'cancelled') + ' <a href="/app/banks/link">Try again</a>', 'err');
         } else {
           setStatus('Cancelled. <a href="/app/banks/link">Try again</a>', '');
         }
+      },
+      onEvent: (name, metadata) => {
+        if (name === 'ERROR' || name === 'EXIT') report('event:' + name, null, metadata);
       },
     });
     setStatus('Opening Plaid…', '');

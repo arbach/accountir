@@ -7,11 +7,12 @@ use crate::config::PlaidConfig;
 pub enum PlaidError {
     #[error("plaid http error: {0}")]
     Http(#[from] reqwest::Error),
-    #[error("plaid api error ({status}, {error_code}): {error_message}")]
+    #[error("plaid api error ({status}, {error_code}, req {request_id}): {error_message}")]
     Api {
         status: u16,
         error_code: String,
         error_message: String,
+        request_id: String,
     },
     #[error("plaid response missing field: {0}")]
     MissingField(&'static str),
@@ -40,27 +41,52 @@ impl PlaidClient {
         let resp = self.http.post(&url).json(&body).send().await?;
         let status = resp.status();
         let value: Value = resp.json().await?;
+        let request_id = value["request_id"].as_str().unwrap_or("").to_string();
         if !status.is_success() {
+            let error_code = value["error_code"].as_str().unwrap_or("unknown").to_string();
+            let error_message = value["error_message"]
+                .as_str()
+                .unwrap_or("(no message)")
+                .to_string();
+            let error_type = value["error_type"].as_str().unwrap_or("");
+            tracing::warn!(
+                path,
+                status = status.as_u16(),
+                error_type,
+                %error_code,
+                %error_message,
+                request_id = %request_id,
+                "plaid api error"
+            );
             return Err(PlaidError::Api {
                 status: status.as_u16(),
-                error_code: value["error_code"].as_str().unwrap_or("unknown").to_string(),
-                error_message: value["error_message"]
-                    .as_str()
-                    .unwrap_or("(no message)")
-                    .to_string(),
+                error_code,
+                error_message,
+                request_id,
             });
         }
+        tracing::debug!(path, request_id = %request_id, "plaid api ok");
         Ok(value)
     }
 
     /// `/link/token/create` — returns a link_token suitable for Plaid Link's `token` field.
     pub async fn create_link_token(&self, user_id: &str) -> Result<String, PlaidError> {
+        // Pull as much history as Plaid allows:
+        //  - transactions: 730-day (24-month) look-back via `days_requested`
+        //  - statements:   max 2-year window (PDF statements) — Plaid hard-caps at 2 years
+        let today = chrono::Utc::now().date_naive();
+        let two_years_ago = today - chrono::Duration::days(729);
         let mut body = json!({
             "user": { "client_user_id": user_id },
             "client_name": "Accountir",
-            "products": ["transactions"],
+            "products": ["transactions", "statements"],
             "country_codes": ["US"],
             "language": "en",
+            "transactions": { "days_requested": 730 },
+            "statements": {
+                "start_date": two_years_ago.format("%Y-%m-%d").to_string(),
+                "end_date": today.format("%Y-%m-%d").to_string(),
+            },
         });
         if let Some(ref redirect) = self.config.redirect_uri {
             body["redirect_uri"] = json!(redirect);
@@ -132,6 +158,41 @@ impl PlaidClient {
     pub async fn statements_list(&self, access_token: &str) -> Result<Value, PlaidError> {
         self.post("/statements/list", json!({ "access_token": access_token }))
             .await
+    }
+
+    /// `/statements/download` — returns the raw PDF bytes for one statement.
+    /// Unlike other endpoints this responds with a binary body, not JSON.
+    pub async fn statements_download(
+        &self,
+        access_token: &str,
+        statement_id: &str,
+    ) -> Result<Vec<u8>, PlaidError> {
+        let url = format!("{}/statements/download", self.config.env.base_url());
+        let body = json!({
+            "client_id": self.config.client_id,
+            "secret": self.config.secret,
+            "access_token": access_token,
+            "statement_id": statement_id,
+        });
+        let resp = self.http.post(&url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let v: Value = resp.json().await.unwrap_or(Value::Null);
+            let request_id = v["request_id"].as_str().unwrap_or("").to_string();
+            tracing::warn!(
+                statement_id,
+                status = status.as_u16(),
+                request_id = %request_id,
+                "plaid statements/download error"
+            );
+            return Err(PlaidError::Api {
+                status: status.as_u16(),
+                error_code: v["error_code"].as_str().unwrap_or("unknown").to_string(),
+                error_message: v["error_message"].as_str().unwrap_or("(no message)").to_string(),
+                request_id,
+            });
+        }
+        Ok(resp.bytes().await?.to_vec())
     }
 
     /// `/transactions/get` — historical pull with explicit date range. Used for backfills

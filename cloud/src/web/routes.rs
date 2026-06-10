@@ -42,6 +42,11 @@ pub fn router() -> Router<AppState> {
         .route("/app/banks/{id}/provision", post(banks_provision))
         .route("/app/banks/{id}/historical", get(banks_historical))
         .route("/app/banks/{id}/statements-check", get(banks_statements_check))
+        .route("/app/banks/{id}/statements", get(banks_statements))
+        .route(
+            "/app/banks/{id}/statements/{statement_id}/import",
+            post(banks_statement_import),
+        )
         .route("/app/admin/companies", get(admin_companies).post(admin_company_create))
         .route("/app/admin/companies/{id}/switch", post(admin_company_switch))
         .route("/app/admin/members", get(admin_members).post(admin_member_add))
@@ -1507,6 +1512,220 @@ async fn banks_statements_check(
             "error": format!("{e}"),
         }))).into_response(),
     }
+}
+
+/// Decrypt the Plaid access token for an item owned by the active company.
+async fn item_access_token(
+    state: &AppState,
+    company_id: Uuid,
+    item_uuid: Uuid,
+) -> Result<String, Response> {
+    use sqlx::Acquire;
+    let mut conn = state
+        .pool
+        .acquire()
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db").into_response())?;
+    let mut tx = conn
+        .begin()
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db").into_response())?;
+    crate::store::event_store::set_tenant(&mut tx, company_id)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "tenant").into_response())?;
+    let row: Option<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT access_token_ciphertext, access_token_nonce FROM plaid_items WHERE id = $1 AND company_id = $2",
+    )
+    .bind(item_uuid)
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .ok()
+    .flatten();
+    let _ = tx.commit().await;
+    let (ct, nonce) = row.ok_or_else(|| (StatusCode::NOT_FOUND, "item").into_response())?;
+    let cipher = crate::plaid::crypto::TokenCipher::new(&state.config.plaid.token_enc_key);
+    cipher
+        .decrypt(&ct, &nonce)
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "decrypt").into_response())
+}
+
+/// GET /app/banks/{id}/statements — list available Plaid statements with an import action.
+async fn banks_statements(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let item_uuid = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad item id").into_response(),
+    };
+    let access_token = match item_access_token(&state, company_id, item_uuid).await {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+
+    let plaid = crate::plaid::client::PlaidClient::new(state.config.plaid.clone());
+    let listing = plaid.statements_list(&access_token).await;
+
+    let mut rows = String::new();
+    match &listing {
+        Ok(v) => {
+            if let Some(accounts) = v.get("accounts").and_then(|a| a.as_array()) {
+                for acct in accounts {
+                    let acct_name = acct
+                        .get("account_name")
+                        .and_then(|x| x.as_str())
+                        .or_else(|| acct.get("official_name").and_then(|x| x.as_str()))
+                        .unwrap_or("account");
+                    if let Some(stmts) = acct.get("statements").and_then(|s| s.as_array()) {
+                        for st in stmts {
+                            let sid = st.get("statement_id").and_then(|x| x.as_str()).unwrap_or("");
+                            let month = st.get("month").and_then(|x| x.as_i64()).unwrap_or(0);
+                            let year = st.get("year").and_then(|x| x.as_i64()).unwrap_or(0);
+                            rows.push_str(&format!(
+                                "<tr><td>{acct}</td><td>{year}-{month:02}</td>\
+                                 <td><form method=\"post\" action=\"/app/banks/{id}/statements/{sid}/import\" style=\"margin:0\">\
+                                 <button type=\"submit\">Import &amp; parse</button></form></td></tr>",
+                                acct = esc_html(acct_name),
+                            ));
+                        }
+                    }
+                }
+            }
+            if rows.is_empty() {
+                rows.push_str("<tr><td colspan=3>No statements available for this item yet.</td></tr>");
+            }
+        }
+        Err(e) => {
+            rows.push_str(&format!(
+                "<tr><td colspan=3>Statements not available: {}</td></tr>",
+                esc_html(&format!("{e}"))
+            ));
+        }
+    }
+
+    let parsed_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM statement_lines WHERE company_id = $1 AND item_id = $2",
+    )
+    .bind(company_id)
+    .bind(item_uuid)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+
+    let page = format!(
+        "<!doctype html><html><head><meta charset=utf-8><title>Statements</title>\
+        <style>body{{font-family:system-ui,sans-serif;max-width:820px;margin:2rem auto;padding:0 1rem;color:#222}}\
+        table{{width:100%;border-collapse:collapse;margin-top:1rem}}td,th{{padding:6px 8px;border-bottom:1px solid #eee;text-align:left}}\
+        button{{cursor:pointer;padding:4px 10px}}a{{color:#2563eb}}</style></head><body>\
+        <p><a href=\"/app/banks\">&larr; Banks</a></p><h1>Statements</h1>\
+        <p>{parsed_count} parsed line(s) staged for this bank. Importing a statement downloads the PDF \
+        and uses AI to extract its transactions (up to Plaid's 2-year statement window).</p>\
+        <table><thead><tr><th>Account</th><th>Period</th><th></th></tr></thead><tbody>{rows}</tbody></table>\
+        </body></html>"
+    );
+    Html(page).into_response()
+}
+
+/// POST /app/banks/{id}/statements/{statement_id}/import — download, parse, stage.
+async fn banks_statement_import(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path((id, statement_id)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let item_uuid = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad item id").into_response(),
+    };
+
+    let api_key = match state.config.anthropic_api_key.clone() {
+        Some(k) => k,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Statement parsing needs ANTHROPIC_API_KEY configured on the server.",
+            )
+                .into_response()
+        }
+    };
+
+    let access_token = match item_access_token(&state, company_id, item_uuid).await {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let plaid = crate::plaid::client::PlaidClient::new(state.config.plaid.clone());
+
+    let pdf = match plaid.statements_download(&access_token, &statement_id).await {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("download failed: {e}")).into_response(),
+    };
+    let text = match crate::plaid::statements::extract_text(&pdf) {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, format!("pdf parse failed: {e}")).into_response(),
+    };
+    let lines = match crate::plaid::statements::parse_with_ai(&api_key, &text).await {
+        Ok(l) => l,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("ai parse failed: {e}")).into_response(),
+    };
+
+    let mut n = 0i64;
+    if let Ok(mut conn) = state.pool.acquire().await {
+        // Re-import is idempotent: drop any prior parse of this statement first.
+        let _ = sqlx::query(
+            "DELETE FROM statement_lines WHERE company_id=$1 AND item_id=$2 AND statement_id=$3",
+        )
+        .bind(company_id)
+        .bind(item_uuid)
+        .bind(&statement_id)
+        .execute(&mut *conn)
+        .await;
+        for l in &lines {
+            let d = NaiveDate::parse_from_str(&l.date, "%Y-%m-%d").ok();
+            let res = sqlx::query(
+                "INSERT INTO statement_lines (id, company_id, item_id, statement_id, txn_date, description, amount_cents) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(company_id)
+            .bind(item_uuid)
+            .bind(&statement_id)
+            .bind(d)
+            .bind(&l.description)
+            .bind(l.amount_cents)
+            .execute(&mut *conn)
+            .await;
+            if res.is_ok() {
+                n += 1;
+            }
+        }
+    }
+    tracing::info!(statement_id = %statement_id, lines = n, "statement parsed and staged");
+    Redirect::to(&format!("/app/banks/{id}/statements")).into_response()
+}
+
+/// Minimal HTML escaping for interpolated, untrusted strings.
+fn esc_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 async fn banks_unlink(

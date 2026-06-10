@@ -1,4 +1,9 @@
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    response::Html,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Acquire;
@@ -17,7 +22,78 @@ pub fn router() -> Router<AppState> {
         .route("/plaid/exchange-token", post(exchange_token))
         .route("/plaid/sync", post(sync))
         .route("/plaid/balances", post(balances))
+        // OAuth return target (browser, Google-authed): resumes Plaid Link.
+        .route("/plaid/oauth-return", get(oauth_return))
+        // Plaid Link client-side telemetry (onExit/onEvent) — for debugging & tickets.
+        .route("/plaid/link-event", post(link_event))
+        // Plaid server-to-server webhook (UNAUTHENTICATED; SSO-bypassed at the edge).
+        .route("/plaid/webhook", post(webhook))
 }
+
+// ---------------------------------------------------------------------------
+// Observability + OAuth return
+// ---------------------------------------------------------------------------
+
+/// Plaid posts item/transaction updates here. Logs and acks; never mutates.
+async fn webhook(body: String) -> Json<Value> {
+    let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    tracing::info!(
+        webhook_type = v.get("webhook_type").and_then(|x| x.as_str()).unwrap_or(""),
+        webhook_code = v.get("webhook_code").and_then(|x| x.as_str()).unwrap_or(""),
+        item_id = v.get("item_id").and_then(|x| x.as_str()).unwrap_or(""),
+        payload = %body,
+        "plaid webhook received"
+    );
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// Browser reports Plaid Link onExit/onEvent here so failures (e.g. Chase OAuth)
+/// are captured server-side with the request_id Plaid support needs.
+async fn link_event(body: String) -> Json<Value> {
+    let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    tracing::warn!(
+        kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("event"),
+        error_code = v.get("error_code").and_then(|x| x.as_str()).unwrap_or(""),
+        error_type = v.get("error_type").and_then(|x| x.as_str()).unwrap_or(""),
+        request_id = v.get("request_id").and_then(|x| x.as_str()).unwrap_or(""),
+        link_session_id = v.get("link_session_id").and_then(|x| x.as_str()).unwrap_or(""),
+        institution = v.get("institution_name").and_then(|x| x.as_str()).unwrap_or(""),
+        payload = %body,
+        "plaid link event"
+    );
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// Page Plaid redirects the browser back to after an OAuth bank (e.g. Chase).
+/// Resumes the Link handler with the received redirect URI.
+async fn oauth_return() -> Html<&'static str> {
+    Html(OAUTH_RETURN_HTML)
+}
+
+const OAUTH_RETURN_HTML: &str = r#"<!doctype html><html><head><meta charset="utf-8">
+<title>Completing bank link…</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font-family:system-ui,sans-serif;padding:2rem;color:#222}a{color:#2563eb}</style></head>
+<body><div id="s">Completing bank connection…</div>
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<script>
+var s=document.getElementById('s');
+var token=localStorage.getItem('plaid_link_token');
+function report(kind,err,meta){try{var p=Object.assign({kind:kind},err||{},meta||{});
+fetch('/plaid/link-event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});}catch(e){}}
+if(!token){s.innerHTML='Link session expired. <a href="/app/banks/link">Start again</a>.';}
+else{var h=Plaid.create({token:token,receivedRedirectUri:window.location.href,
+onSuccess:async function(pt,md){s.textContent='Saving connection…';
+try{var r=await fetch('/plaid/exchange-token',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({public_token:pt,institution:{institution_id:(md.institution&&md.institution.institution_id)||'',name:(md.institution&&md.institution.name)||'Unknown'},
+accounts:(md.accounts||[]).map(function(a){return{account_id:a.id,name:a.name,official_name:a.official_name||null,type:a.type||a.subtype||'depository',mask:a.mask||null};})})});
+localStorage.removeItem('plaid_link_token');
+if(!r.ok){var j=await r.json().catch(function(){return{};});s.textContent='Failed to save: '+(j.message||j.error||r.status);return;}
+s.textContent='Bank linked. Redirecting…';setTimeout(function(){location='/app/banks';},800);}
+catch(e){s.textContent='Error saving: '+e.message;}},
+onExit:function(err,md){report('exit',err,md);s.innerHTML=err?('Exited: '+(err.display_message||err.error_message||err.error_code||'')+' · <a href="/app/banks/link">Try again</a>'):'Cancelled. <a href="/app/banks/link">Try again</a>';},
+onEvent:function(name,md){if(name==='ERROR'||name==='EXIT')report('event:'+name,null,md);}});
+h.open();}
+</script></body></html>"#;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,9 +131,12 @@ impl From<PlaidError> for AppError {
                 status,
                 error_code,
                 error_message,
+                request_id,
             } => {
-                tracing::warn!(status, %error_code, %error_message, "plaid api error");
-                AppError::BadRequest(format!("plaid: {error_code}: {error_message}"))
+                tracing::warn!(status, %error_code, %error_message, %request_id, "plaid api error");
+                AppError::BadRequest(format!(
+                    "plaid: {error_code}: {error_message} (request_id={request_id})"
+                ))
             }
             other => {
                 tracing::error!(error = %other, "plaid client error");
