@@ -527,7 +527,20 @@ async fn post_entry_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
         return json!({ "error": "need at least 2 lines" });
     }
 
-    // Resolve account_numbers → uuids and convert dollar amounts to cents
+    // Resolve account_numbers → uuids and convert dollar amounts to cents.
+    // accounts has FORCE RLS: lookups must run inside a tenant-scoped tx or
+    // they silently match nothing.
+    let mut conn = match ctx.pool.acquire().await {
+        Ok(c) => c,
+        Err(e) => return json!({ "error": format!("db: {e}") }),
+    };
+    let mut tx = match sqlx::Acquire::begin(&mut conn).await {
+        Ok(t) => t,
+        Err(e) => return json!({ "error": format!("db: {e}") }),
+    };
+    if let Err(e) = crate::store::event_store::set_tenant(&mut tx, ctx.company_id).await {
+        return json!({ "error": format!("db: {e}") });
+    }
     let mut input_lines: Vec<EntryLineInput> = Vec::with_capacity(lines_value.len());
     let mut sum_cents = 0i64;
     for line in lines_value {
@@ -552,7 +565,7 @@ async fn post_entry_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
         )
         .bind(ctx.company_id)
         .bind(acct_num)
-        .fetch_optional(ctx.pool)
+        .fetch_optional(&mut *tx)
         .await
         .ok()
         .flatten();
@@ -567,6 +580,7 @@ async fn post_entry_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
             memo: memo_l,
         });
     }
+    drop(tx);
     if sum_cents != 0 {
         return json!({
             "error": format!("lines must balance to zero (got {} cents off)", sum_cents),
