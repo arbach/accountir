@@ -6,7 +6,7 @@
 </div>
 
 <form method="get" action="/app/transactions" class="card" style="margin-bottom: var(--gap);">
-  <div class="form-row" style="grid-template-columns: 1fr 1fr 2fr 1fr 2fr auto;">
+  <div class="form-row" style="grid-template-columns: repeat(5, 1fr); align-items: end;">
     <label class="field"><span class="label-text">Preset</span><select onchange="datePreset(this)" title="Date presets">
         <option value="">Preset…</option>
         <option value="this_month">This month</option>
@@ -37,6 +37,15 @@
         {% endfor %}
       </select>
     </label>
+    <label class="field"><span class="label-text">Type</span>
+      <select name="type">
+        <option value="">All</option>
+        <option value="debit" {% if selected_type.as_deref() == Some("debit") %}selected{% endif %}>Money in (debit)</option>
+        <option value="credit" {% if selected_type.as_deref() == Some("credit") %}selected{% endif %}>Money out (credit)</option>
+      </select>
+    </label>
+    <label class="field"><span class="label-text">Min amount</span><input type="text" name="min_amount" value="{{ min_amount_str }}" placeholder="$ min" inputmode="decimal" style="width: 90px;"></label>
+    <label class="field"><span class="label-text">Max amount</span><input type="text" name="max_amount" value="{{ max_amount_str }}" placeholder="$ max" inputmode="decimal" style="width: 90px;"></label>
     <label class="field"><span class="label-text">Search memo</span><input type="text" name="search" value="{{ search.as_deref().unwrap_or("") }}" placeholder="text in memo"></label>
     <div style="display: flex; gap: 6px; align-items: end; padding-bottom: 12px;">
       <button type="submit" class="btn btn-secondary">Apply</button>

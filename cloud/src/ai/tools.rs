@@ -128,7 +128,7 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "list_transactions",
-            "description": "List transaction lines, optionally filtered by date range, account_number, or memo search. Amounts in dollars (positive=debit). Default limit 50, max 200.",
+            "description": "List transaction lines, optionally filtered by date range, account_number, memo search, direction, or amount range. Amounts in dollars (positive=debit). Default limit 50, max 200.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -136,6 +136,9 @@ pub fn schemas() -> Vec<Value> {
                     "end": {"type": "string", "description": "YYYY-MM-DD"},
                     "account_number": {"type": "string"},
                     "search": {"type": "string", "description": "substring match on memo"},
+                    "direction": {"type": "string", "enum": ["debit", "credit"], "description": "debit = money in on the bank side, credit = money out"},
+                    "min_amount": {"type": "number", "description": "minimum absolute amount in dollars"},
+                    "max_amount": {"type": "number", "description": "maximum absolute amount in dollars"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
                 }
             }
@@ -308,6 +311,13 @@ async fn list_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
         source: None,
         search: input.get("search").and_then(|v| v.as_str()).map(str::to_string),
         include_void: false,
+        direction: input
+            .get("direction")
+            .and_then(|v| v.as_str())
+            .filter(|s| *s == "debit" || *s == "credit")
+            .map(str::to_string),
+        min_cents: input.get("min_amount").and_then(|v| v.as_f64()).map(|v| (v * 100.0).round() as i64),
+        max_cents: input.get("max_amount").and_then(|v| v.as_f64()).map(|v| (v * 100.0).round() as i64),
     };
     let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(50).min(200) as usize;
     match queries::list_transactions(ctx.pool, ctx.company_id, &filter).await {

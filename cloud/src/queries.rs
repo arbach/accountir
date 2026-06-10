@@ -701,6 +701,11 @@ pub struct TransactionFilter {
     pub source: Option<String>,
     pub search: Option<String>,
     pub include_void: bool,
+    /// "debit" (money in on the bank side) or "credit" (money out).
+    pub direction: Option<String>,
+    /// Absolute-amount bounds, in cents.
+    pub min_cents: Option<i64>,
+    pub max_cents: Option<i64>,
 }
 
 pub async fn list_transactions(
@@ -731,6 +736,11 @@ pub async fn list_transactions(
           AND ($4::text IS NULL OR je.source::text = $4)
           AND ($5::text IS NULL OR je.memo ILIKE '%' || $5 || '%')
           AND ($6::boolean = true OR je.is_void = false)
+          AND ($7::text IS NULL
+               OR ($7 = 'debit' AND jl.amount > 0)
+               OR ($7 = 'credit' AND jl.amount < 0))
+          AND ($8::bigint IS NULL OR abs(jl.amount) >= $8)
+          AND ($9::bigint IS NULL OR abs(jl.amount) <= $9)
         ORDER BY je.date DESC, je.id DESC, jl.amount DESC
         LIMIT 500
         "#,
@@ -741,6 +751,9 @@ pub async fn list_transactions(
     .bind(filter.source.as_deref())
     .bind(filter.search.as_deref())
     .bind(filter.include_void)
+    .bind(filter.direction.as_deref())
+    .bind(filter.min_cents)
+    .bind(filter.max_cents)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;

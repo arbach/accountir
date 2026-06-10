@@ -261,6 +261,9 @@ struct TransactionsTpl {
     search: Option<String>,
     start_str: String,
     end_str: String,
+    selected_type: Option<String>,
+    min_amount_str: String,
+    max_amount_str: String,
 }
 
 #[derive(Template)]
@@ -1871,6 +1874,16 @@ struct TxFilterQuery {
     account_id: Option<String>,
     source: Option<String>,
     search: Option<String>,
+    #[serde(rename = "type")]
+    direction: Option<String>,
+    min_amount: Option<String>,
+    max_amount: Option<String>,
+}
+
+/// Tolerant dollar-amount parse for filter inputs ("100", "1,250.50", "$40").
+fn parse_filter_amount_cents(s: &str) -> Option<i64> {
+    let cleaned: String = s.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+    parse_amount_cents(&cleaned)
 }
 
 async fn transactions_list(
@@ -1893,11 +1906,21 @@ async fn transactions_list(
     });
     let source = q.source.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
     let search = q.search.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
+    let direction = q
+        .direction
+        .as_deref()
+        .filter(|s| *s == "debit" || *s == "credit")
+        .map(str::to_string);
+    let min_cents = q.min_amount.as_deref().and_then(parse_filter_amount_cents);
+    let max_cents = q.max_amount.as_deref().and_then(parse_filter_amount_cents);
     let filter = queries::TransactionFilter {
         start, end, account_id,
         source: source.clone(),
         search: search.clone(),
         include_void: false,
+        direction: direction.clone(),
+        min_cents,
+        max_cents,
     };
     let rows = queries::list_transactions(&state.pool, company_id, &filter)
         .await
@@ -1916,6 +1939,9 @@ async fn transactions_list(
         search,
         start_str: start.map(|d| d.to_string()).unwrap_or_default(),
         end_str: end.map(|d| d.to_string()).unwrap_or_default(),
+        selected_type: direction,
+        min_amount_str: q.min_amount.unwrap_or_default(),
+        max_amount_str: q.max_amount.unwrap_or_default(),
     })
 }
 
