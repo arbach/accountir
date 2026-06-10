@@ -424,7 +424,7 @@
     #aiw-form input { flex: 1; font-size: 13px; }
   </style>
   <button id="aiw-fab" title="AI accountant">&#128172;</button>
-  <div id="aiw-panel" role="dialog" aria-label="AI accountant">
+  <div id="aiw-panel" role="dialog" aria-label="AI accountant" data-company="{{ nav.active_company_name }}">
     <div id="aiw-head"><span>AI accountant &middot; {{ nav.active_company_name }}</span>
       <span><a href="/app/chat" style="font-weight:400;font-size:12px;">Full view</a>
       <button id="aiw-close" class="btn btn-ghost" style="padding:2px 8px;">&times;</button></span></div>
@@ -437,34 +437,94 @@
     var fab = document.getElementById('aiw-fab'), panel = document.getElementById('aiw-panel');
     var msgs = document.getElementById('aiw-msgs'), form = document.getElementById('aiw-form');
     var input = document.getElementById('aiw-input'), send = document.getElementById('aiw-send');
+    var COMPANY = panel.getAttribute('data-company') || '';
     var loaded = false;
+    var S = window.sessionStorage;
+    function sget(k) { try { return S.getItem(k); } catch (_) { return null; } }
+    function sset(k, v) { try { S.setItem(k, v); } catch (_) {} }
+    function sdel(k) { try { S.removeItem(k); } catch (_) {} }
 
     function line(role, body) {
       var r = document.createElement('div'); r.className = 'aiw-role'; r.textContent = role;
       var b = document.createElement('div'); b.className = 'aiw-body'; b.textContent = body || '';
       msgs.appendChild(r); msgs.appendChild(b); msgs.scrollTop = msgs.scrollHeight; return b;
     }
+    function renderLines(lines) {
+      msgs.innerHTML = '';
+      if (!lines || !lines.length) { line('assistant', "Hi! I'm your AI accountant. Ask me anything about this company's books."); return; }
+      lines.forEach(function (l) { line(l.role, l.body); });
+    }
     async function loadHistory() {
       try {
         var r = await fetch('/app/chat/history'); var d = await r.json();
-        msgs.innerHTML = '';
-        if (!d.lines || !d.lines.length) { line('assistant', "Hi! I'm your AI accountant. Ask me anything about this company's books."); return; }
-        d.lines.forEach(function (l) { line(l.role, l.body); });
+        renderLines(d.lines);
       } catch (e) { msgs.innerHTML = ''; line('assistant', '(could not load history)'); }
     }
+    function openPanel() {
+      panel.classList.add('open'); sset('aiwOpen', '1');
+      if (!loaded) { loaded = true; loadHistory(); }
+      input.focus();
+    }
+    function closePanel() { panel.classList.remove('open'); sdel('aiwOpen'); }
     fab.addEventListener('click', function () {
-      panel.classList.toggle('open');
-      if (panel.classList.contains('open')) { if (!loaded) { loaded = true; loadHistory(); } input.focus(); }
+      if (panel.classList.contains('open')) { closePanel(); } else { openPanel(); }
     });
-    document.getElementById('aiw-close').addEventListener('click', function () { panel.classList.remove('open'); });
+    document.getElementById('aiw-close').addEventListener('click', closePanel);
+
+    // Survive page switches: a turn keeps running server-side after navigation,
+    // so remember the question and poll history on the next page until the
+    // assistant's reply lands.
+    function setPending(q) { sset('aiwPending', JSON.stringify({ q: q, c: COMPANY, ts: Date.now() })); }
+    function getPending() {
+      try {
+        var p = JSON.parse(sget('aiwPending') || 'null');
+        if (p && p.c === COMPANY && Date.now() - p.ts < 11 * 60 * 1000) { return p; }
+      } catch (_) {}
+      sdel('aiwPending'); return null;
+    }
+    function setBusy(on) {
+      input.disabled = on; send.disabled = on; send.textContent = on ? '\u2026' : 'Send';
+      if (!on) { input.focus(); }
+    }
+    async function pollForAnswer(q, indicator) {
+      setBusy(true);
+      var deadline = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise(function (res) { setTimeout(res, 2500); });
+        try {
+          var r = await fetch('/app/chat/history'); var d = await r.json();
+          var lines = d.lines || []; var li = -1;
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].role === 'user' && lines[i].body === q) { li = i; }
+          }
+          if (li >= 0 && li < lines.length - 1) {
+            sdel('aiwPending'); renderLines(lines); setBusy(false); return;
+          }
+        } catch (_) {}
+      }
+      sdel('aiwPending'); setBusy(false);
+      if (indicator) { indicator.textContent = '(the agent is taking unusually long \u2014 reopen this chat in a bit)'; }
+    }
+
+    // Restore state after a page switch.
+    if (sget('aiwOpen') === '1') {
+      panel.classList.add('open'); loaded = true;
+      loadHistory().then(function () {
+        var p = getPending();
+        if (p) { pollForAnswer(p.q, line('assistant', '(working\u2026)')); }
+      });
+    }
+    var draft = sget('aiwDraft'); if (draft) { input.value = draft; }
+    input.addEventListener('input', function () { sset('aiwDraft', input.value); });
 
     form.addEventListener('submit', async function (e) {
       e.preventDefault();
       var text = input.value.trim(); if (!text) return;
-      input.value = ''; input.disabled = true; send.disabled = true; send.textContent = '\u2026';
+      input.value = ''; sdel('aiwDraft'); setBusy(true);
       line('user', text);
       var live = line('assistant', '');
       var pendingNav = null;
+      setPending(text);
       function handle(ev) {
         if (ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
             && ev.event.delta && ev.event.delta.type === 'text_delta') {
@@ -495,9 +555,15 @@
             if (data) { try { handle(JSON.parse(data)); } catch (_) {} }
           }
         }
+        sdel('aiwPending');
         if (!live.textContent) { live.previousSibling && msgs.removeChild(live.previousSibling); msgs.removeChild(live); }
-      } catch (err) { live.textContent = '(error: ' + err.message + ')'; }
-      input.disabled = false; send.disabled = false; send.textContent = 'Send'; input.focus();
+        setBusy(false);
+      } catch (err) {
+        // Connection dropped but the turn keeps running server-side; fall back
+        // to polling history for the answer.
+        live.textContent = '(connection lost \u2014 waiting for the answer\u2026)';
+        pollForAnswer(text, live);
+      }
       if (pendingNav) { setTimeout(function () { window.location = pendingNav; }, 400); }
     });
   })();
