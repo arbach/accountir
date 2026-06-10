@@ -72,6 +72,11 @@ pub fn router() -> Router<AppState> {
         .route("/app/dashboard", get(dashboard))
         .route("/app/tax", get(tax_filing))
         .route("/app/tax/profile", post(tax_profile_save))
+        .route(
+            "/app/tax/profile/upload",
+            post(tax_profile_upload)
+                .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
         .route("/app/tax/forms/{id}/pdf", get(tax_form_pdf))
         .route("/app/tax/forms/{id}/approve", post(tax_form_approve))
         .route("/app/tax/forms/{id}/delete", post(tax_form_delete))
@@ -2353,6 +2358,114 @@ async fn tax_profile_save(
     {
         tracing::error!(error = ?e, "tax profile save failed");
     }
+    Redirect::to("/app/tax").into_response()
+}
+
+/// POST /app/tax/profile/upload — upload an entity document (EIN letter,
+/// articles of organization, prior return); AI-parse it and fill the tax
+/// profile with whatever it states, keeping existing values for the rest.
+async fn tax_profile_upload(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let _ = user;
+
+    let mut file: Option<Vec<u8>> = None;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("document") {
+            match field.bytes().await {
+                Ok(b) => file = Some(b.to_vec()),
+                Err(e) => {
+                    return (StatusCode::BAD_REQUEST, format!("upload failed: {e}")).into_response()
+                }
+            }
+        }
+    }
+    let Some(bytes) = file.filter(|b| !b.is_empty()) else {
+        return (StatusCode::BAD_REQUEST, "no document in upload").into_response();
+    };
+    let text = if bytes.starts_with(b"%PDF") {
+        match crate::plaid::statements::extract_text(&bytes) {
+            Ok(t) => t,
+            Err(e) => {
+                return (StatusCode::UNPROCESSABLE_ENTITY, format!("pdf parse failed: {e}"))
+                    .into_response()
+            }
+        }
+    } else if bytes.contains(&0) {
+        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "only PDF and text files are supported")
+            .into_response();
+    } else {
+        String::from_utf8_lossy(&bytes).to_string()
+    };
+
+    let parsed = match crate::tax::parse_entity_document(&text).await {
+        Ok(v) => v,
+        Err(e) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, format!("could not parse document: {e}"))
+                .into_response()
+        }
+    };
+
+    // Merge: only overwrite with values the document actually stated.
+    let existing = crate::tax::get_profile(&state.pool, company_id).await.unwrap_or(None);
+    let pick = |key: &str, old: String| -> String {
+        parsed
+            .get(key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or(old)
+    };
+    let entity_type = pick(
+        "entity_type",
+        existing.as_ref().map(|p| p.entity_type.clone()).unwrap_or_default(),
+    );
+    let legal_name = pick(
+        "legal_name",
+        existing.as_ref().map(|p| p.legal_name.clone()).unwrap_or_default(),
+    );
+    let ein = pick("ein", existing.as_ref().map(|p| p.ein.clone()).unwrap_or_default());
+    let address = parsed
+        .get("address")
+        .filter(|a| a.is_object())
+        .cloned()
+        .or_else(|| existing.as_ref().map(|p| p.address.clone()))
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    if entity_type.is_empty() && legal_name.is_empty() && ein.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the document didn't contain recognizable entity details (entity type, legal name, or EIN)",
+        )
+            .into_response();
+    }
+    // entity_type may legitimately still be unknown; profile save requires it,
+    // so default to schedule_c only if nothing else is known yet.
+    let entity_type = if entity_type.is_empty() { "schedule_c".to_string() } else { entity_type };
+    if let Err(e) = crate::tax::set_profile(
+        &state.pool,
+        company_id,
+        &entity_type,
+        &legal_name,
+        &ein,
+        &address,
+    )
+    .await
+    {
+        tracing::error!(error = ?e, "profile save from document failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not save profile").into_response();
+    }
+    tracing::info!(company = %company_id, "tax profile filled from uploaded entity document");
     Redirect::to("/app/tax").into_response()
 }
 

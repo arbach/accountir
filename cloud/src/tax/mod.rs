@@ -81,6 +81,59 @@ pub async fn set_profile(
     Ok(())
 }
 
+const ENTITY_DOC_SYSTEM: &str = "You extract business identity data from US entity/tax documents \
+(IRS EIN assignment letter CP-575, articles of organization/incorporation, S-election CP261, \
+prior-year tax returns, state registrations). Respond with ONLY a JSON object, no prose: \
+{\"entity_type\": \"schedule_c\"|\"s_corp\"|\"partnership\"|\"c_corp\"|null, \"legal_name\": string|null, \
+\"ein\": \"XX-XXXXXXX\"|null, \"address\": {\"line1\": string, \"line2\": string, \"city\": string, \
+\"state\": string, \"zip\": string}|null}. \
+entity_type mapping: Form 1120-S or accepted S election -> s_corp; Form 1065 or partnership -> partnership; \
+Form 1120 -> c_corp; Schedule C, sole proprietor, or single-member LLC -> schedule_c. \
+Use null for anything the document does not state — never guess an EIN.";
+
+/// AI-parse an uploaded entity document into tax-profile fields via the agent
+/// daemon's stateless /oneshot endpoint.
+pub async fn parse_entity_document(text: &str) -> Result<Value, String> {
+    let bounded: String = text.chars().take(40_000).collect();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let resp = client
+        .post(format!("{}/oneshot", crate::ai::agent::agentd_url()))
+        .json(&json!({
+            "system": ENTITY_DOC_SYSTEM,
+            "prompt": format!("Document text:\n\n{bounded}"),
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("agent daemon unreachable: {e}"))?;
+    let body: Value = resp.json().await.map_err(|e| format!("bad daemon reply: {e}"))?;
+    if !body["ok"].as_bool().unwrap_or(false) {
+        return Err(format!(
+            "agent parse failed: {}",
+            body["error"].as_str().unwrap_or("unknown")
+        ));
+    }
+    let out = body["result"].as_str().unwrap_or("");
+    let t = out
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    let json_str = match (t.find('{'), t.rfind('}')) {
+        (Some(s), Some(e)) if e > s => &t[s..=e],
+        _ => t,
+    };
+    serde_json::from_str::<Value>(json_str).map_err(|e| {
+        format!(
+            "could not parse AI response: {e}; got: {}",
+            out.chars().take(200).collect::<String>()
+        )
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct TaxFormRow {
     pub id: Uuid,
