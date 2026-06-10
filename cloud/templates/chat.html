@@ -35,6 +35,8 @@
     {% endif %}
   </div>
   <form id="chat-form" method="post" action="/app/chat/messages" style="border-top: 1px solid var(--border); padding: 12px 14px; display: flex; gap: 8px;">
+    <input type="file" id="chat-file" accept=".pdf,.csv,.txt,.md,.json" style="display:none;">
+    <button type="button" class="btn btn-ghost" id="chat-attach" title="Upload a file for the AI (PDF, CSV, text)">&#128206;</button>
     <input id="chat-input" type="text" name="message" placeholder="Ask anything…" required autofocus autocomplete="off" style="flex: 1;">
     <button id="chat-send" type="submit" class="btn btn-primary">Send</button>
   </form>
@@ -70,13 +72,9 @@
     return b;
   }
 
-  form.addEventListener('submit', async function (e) {
-    e.preventDefault();
-    var text = input.value.trim();
-    if (!text) return;
-    input.value = '';
+  async function runTurn(displayText, doFetch, fallback) {
     input.disabled = true; sendBtn.disabled = true; sendBtn.textContent = 'Thinking…';
-    bubble('user', text);
+    bubble('user', displayText);
     var live = bubble('assistant', '');
     var typing = typingEl();
     box.appendChild(typing); box.scrollTop = box.scrollHeight;
@@ -109,11 +107,7 @@
     }
 
     try {
-      var resp = await fetch('/app/chat/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'message=' + encodeURIComponent(text),
-      });
+      var resp = await doFetch();
       if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
       var reader = resp.body.getReader();
       var dec = new TextDecoder();
@@ -135,12 +129,40 @@
       // Navigate if the agent drove the UI; otherwise reload for canonical history.
       if (pendingNav) { window.location = pendingNav; } else { window.location.reload(); }
     } catch (err) {
-      live.textContent = '(connection error: ' + err.message + ' — falling back)';
-      // Graceful fallback to the blocking form post.
-      form.removeEventListener('submit', arguments.callee);
-      input.value = text; input.disabled = false;
-      form.submit();
+      typing.remove();
+      live.textContent = '(connection error: ' + err.message + ')';
+      input.disabled = false; sendBtn.disabled = false; sendBtn.textContent = 'Send';
+      if (fallback) { fallback(); }
     }
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    runTurn(text, function () {
+      return fetch('/app/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'message=' + encodeURIComponent(text),
+      });
+    }, function () {
+      // Graceful fallback to the blocking form post.
+      input.value = text;
+      form.submit();
+    });
+  });
+
+  var fileInput = document.getElementById('chat-file');
+  document.getElementById('chat-attach').addEventListener('click', function () { fileInput.click(); });
+  fileInput.addEventListener('change', function () {
+    if (!fileInput.files.length) return;
+    var f = fileInput.files[0]; fileInput.value = '';
+    var fd = new FormData(); fd.append('file', f, f.name);
+    runTurn('📎 Uploaded: ' + f.name, function () {
+      return fetch('/app/chat/upload', { method: 'POST', body: fd });
+    });
   });
 })();
 </script>

@@ -504,7 +504,10 @@
       <span><a href="/app/chat" style="font-weight:400;font-size:12px;">Full view</a>
       <button id="aiw-close" class="btn btn-ghost" style="padding:2px 8px;">&times;</button></span></div>
     <div id="aiw-msgs"><div class="muted" style="font-size:12px;">Loading&hellip;</div></div>
-    <form id="aiw-form"><input id="aiw-input" type="text" placeholder="Ask about your books&hellip;" autocomplete="off">
+    <form id="aiw-form">
+      <input type="file" id="aiw-file" accept=".pdf,.csv,.txt,.md,.json" style="display:none;">
+      <button type="button" class="btn btn-ghost" id="aiw-attach" title="Upload a file for the AI (PDF, CSV, text)" style="padding:4px 8px;">&#128206;</button>
+      <input id="aiw-input" type="text" placeholder="Ask about your books&hellip;" autocomplete="off">
       <button type="submit" class="btn btn-primary" id="aiw-send">Send</button></form>
   </div>
   <script>
@@ -597,16 +600,17 @@
     var draft = sget('aiwDraft'); if (draft) { input.value = draft; }
     input.addEventListener('input', function () { sset('aiwDraft', input.value); });
 
-    form.addEventListener('submit', async function (e) {
-      e.preventDefault();
-      var text = input.value.trim(); if (!text) return;
-      input.value = ''; sdel('aiwDraft'); setBusy(true);
-      line('user', text);
+    // Run one turn: show the user line, stream the agent's reply, recover via
+    // history-polling if the connection drops. `doFetch` returns the response
+    // (message stream or file upload \u2014 both speak the same SSE).
+    async function runTurn(displayText, doFetch) {
+      setBusy(true);
+      line('user', displayText);
       var live = line('assistant', '');
       var typing = typingEl();
       msgs.appendChild(typing); msgs.scrollTop = msgs.scrollHeight;
       var pendingNav = null;
-      setPending(text);
+      setPending(displayText);
       function handle(ev) {
         if (ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
             && ev.event.delta && ev.event.delta.type === 'text_delta') {
@@ -623,10 +627,8 @@
         msgs.appendChild(typing); msgs.scrollTop = msgs.scrollHeight;
       }
       try {
-        var resp = await fetch('/app/chat/stream', { method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'message=' + encodeURIComponent(text) });
-        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+        var resp = await doFetch();
+        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status + (resp.status >= 400 ? ': ' + await resp.text() : ''));
         var reader = resp.body.getReader(); var dec = new TextDecoder(); var buf = '';
         while (true) {
           var r = await reader.read(); if (r.done) break;
@@ -647,9 +649,31 @@
         live.textContent = '(connection lost \u2014 waiting for the answer\u2026)';
         live.appendChild(typingEl());
         typing.remove();
-        pollForAnswer(text, live);
+        pollForAnswer(displayText, live);
       }
       if (pendingNav) { setTimeout(function () { window.location = pendingNav; }, 400); }
+    }
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var text = input.value.trim(); if (!text) return;
+      input.value = ''; sdel('aiwDraft');
+      runTurn(text, function () {
+        return fetch('/app/chat/stream', { method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'message=' + encodeURIComponent(text) });
+      });
+    });
+
+    var fileInput = document.getElementById('aiw-file');
+    document.getElementById('aiw-attach').addEventListener('click', function () { fileInput.click(); });
+    fileInput.addEventListener('change', function () {
+      if (!fileInput.files.length) return;
+      var f = fileInput.files[0]; fileInput.value = '';
+      var fd = new FormData(); fd.append('file', f, f.name);
+      runTurn('\ud83d\udcce Uploaded: ' + f.name, function () {
+        return fetch('/app/chat/upload', { method: 'POST', body: fd });
+      });
     });
   })();
   </script>

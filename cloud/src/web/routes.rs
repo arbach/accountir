@@ -64,6 +64,10 @@ pub fn router() -> Router<AppState> {
         .route("/app/chat/messages", post(chat_send))
         .route("/app/chat/stream", post(chat_stream))
         .route("/app/chat/history", get(chat_history))
+        .route(
+            "/app/chat/upload",
+            post(chat_upload).layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
         .route("/app/chat/clear", post(chat_clear_route))
         .route("/app/dashboard", get(dashboard))
         .route("/app/transactions", get(transactions_list))
@@ -1068,6 +1072,93 @@ async fn chat_stream(
             tracing::error!(error = ?e, "agent stream turn failed");
         }
         // tx drops here -> stream ends -> browser sees the SSE close.
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(|v| Ok::<_, std::convert::Infallible>(Event::default().data(v.to_string())));
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+}
+
+/// POST /app/chat/upload — give the agent a file to look at. The extracted
+/// text goes to the agent as the turn body; history just records the upload.
+/// Streams the agent's reply exactly like /app/chat/stream.
+async fn chat_upload(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use tokio_stream::StreamExt;
+
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+
+    let mut file: Option<(String, Vec<u8>)> = None;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("file") {
+            let fname = field.file_name().unwrap_or("file").to_string();
+            match field.bytes().await {
+                Ok(b) => file = Some((fname, b.to_vec())),
+                Err(e) => {
+                    return (StatusCode::BAD_REQUEST, format!("upload failed: {e}")).into_response()
+                }
+            }
+        }
+    }
+    let Some((fname, bytes)) = file else {
+        return (StatusCode::BAD_REQUEST, "no file in upload").into_response();
+    };
+    if bytes.is_empty() {
+        return (StatusCode::BAD_REQUEST, "uploaded file is empty").into_response();
+    }
+
+    let text = if bytes.starts_with(b"%PDF") {
+        match crate::plaid::statements::extract_text(&bytes) {
+            Ok(t) => t,
+            Err(e) => {
+                return (StatusCode::UNPROCESSABLE_ENTITY, format!("pdf parse failed: {e}"))
+                    .into_response()
+            }
+        }
+    } else if bytes.contains(&0) {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "only PDF and text files (CSV, TXT, …) are supported",
+        )
+            .into_response();
+    } else {
+        String::from_utf8_lossy(&bytes).to_string()
+    };
+    if text.trim().is_empty() {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "no text could be extracted").into_response();
+    }
+    let content: String = text.chars().take(60_000).collect();
+    let truncated = content.len() < text.len();
+
+    let agent_text = format!(
+        "[The user uploaded a file in chat: \"{fname}\"{}. Its extracted text follows.]\n\n{content}\n\n\
+         [End of \"{fname}\". Briefly say what the file appears to contain, then ask what the user \
+         would like done with it — unless their intent is already clear from the conversation.]",
+        if truncated { " (truncated to the first 60,000 characters)" } else { "" }
+    );
+    let display = format!("📎 Uploaded: {fname}");
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<serde_json::Value>(64);
+    let pool = state.pool.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::ai::agent::stream_turn_with_display(
+            &pool, user.id, company_id, agent_text, display, tx,
+        )
+        .await
+        {
+            tracing::error!(error = ?e, "agent upload turn failed");
+        }
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx)

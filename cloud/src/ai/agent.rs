@@ -24,7 +24,22 @@ pub async fn stream_turn(
     text: String,
     forward: tokio::sync::mpsc::Sender<Value>,
 ) -> anyhow::Result<()> {
-    crate::ai::chat::append_message(pool, user_id, company_id, "user", &json!(text))
+    let display = text.clone();
+    stream_turn_with_display(pool, user_id, company_id, text, display, forward).await
+}
+
+/// Like `stream_turn`, but persists `display` as the user message in chat
+/// history while sending the full `text` to the agent — used for file uploads,
+/// where history should show "uploaded: name.pdf" rather than the file body.
+pub async fn stream_turn_with_display(
+    pool: &PgPool,
+    user_id: Uuid,
+    company_id: Uuid,
+    text: String,
+    display: String,
+    forward: tokio::sync::mpsc::Sender<Value>,
+) -> anyhow::Result<()> {
+    crate::ai::chat::append_message(pool, user_id, company_id, "user", &json!(display))
         .await
         .map_err(|e| anyhow::anyhow!("store user msg: {e}"))?;
 
