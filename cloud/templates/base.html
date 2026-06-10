@@ -663,7 +663,8 @@
       }
       try {
         var resp = await doFetch();
-        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status + (resp.status >= 400 ? ': ' + await resp.text() : ''));
+        if (!resp.ok) { var emsg = ''; try { emsg = await resp.text(); } catch (_) {} throw new Error('HTTP ' + resp.status + (emsg ? ': ' + emsg.slice(0, 300) : '')); }
+        if (!resp.body) throw new Error('HTTP ' + resp.status);
         var reader = resp.body.getReader(); var dec = new TextDecoder(); var buf = '';
         while (true) {
           var r = await reader.read(); if (r.done) break;

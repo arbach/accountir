@@ -108,7 +108,8 @@
 
     try {
       var resp = await doFetch();
-      if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+      if (!resp.ok) { var msg = ''; try { msg = await resp.text(); } catch (_) {} throw new Error('HTTP ' + resp.status + (msg ? ': ' + msg.slice(0, 300) : '')); }
+      if (!resp.body) throw new Error('HTTP ' + resp.status);
       var reader = resp.body.getReader();
       var dec = new TextDecoder();
       var buf = '';

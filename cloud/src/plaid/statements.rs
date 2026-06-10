@@ -29,6 +29,78 @@ pub fn extract_text(pdf: &[u8]) -> Result<String, String> {
     }
 }
 
+/// Extract text from a PDF, falling back to OCR (pdftoppm + tesseract) for
+/// scanned/image-only documents that have no text layer.
+pub async fn extract_text_or_ocr(pdf: &[u8]) -> Result<String, String> {
+    if let Ok(t) = extract_text(pdf) {
+        // A real text layer yields far more than stray whitespace/page numbers.
+        if t.trim().len() >= 50 {
+            return Ok(t);
+        }
+    }
+    ocr_pdf(pdf).await
+}
+
+const OCR_MAX_PAGES: u32 = 25;
+
+async fn ocr_pdf(pdf: &[u8]) -> Result<String, String> {
+    let dir = std::env::temp_dir().join(format!("ocr-{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("ocr tmp dir: {e}"))?;
+    let result = ocr_pdf_in(&dir, pdf).await;
+    let _ = tokio::fs::remove_dir_all(&dir).await;
+    result
+}
+
+async fn ocr_pdf_in(dir: &std::path::Path, pdf: &[u8]) -> Result<String, String> {
+    let input = dir.join("input.pdf");
+    tokio::fs::write(&input, pdf).await.map_err(|e| format!("ocr write: {e}"))?;
+
+    let ppm = tokio::process::Command::new("pdftoppm")
+        .args(["-r", "200", "-gray", "-png", "-l", &OCR_MAX_PAGES.to_string()])
+        .arg(&input)
+        .arg(dir.join("page"))
+        .output()
+        .await
+        .map_err(|e| format!("pdftoppm failed to start: {e}"))?;
+    if !ppm.status.success() {
+        return Err(format!(
+            "pdftoppm failed: {}",
+            String::from_utf8_lossy(&ppm.stderr).chars().take(200).collect::<String>()
+        ));
+    }
+
+    let mut pages: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| format!("ocr readdir: {e}"))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map(|x| x == "png").unwrap_or(false))
+        .collect();
+    pages.sort();
+    if pages.is_empty() {
+        return Err("the PDF appears to be scanned, but no pages could be rendered for OCR".into());
+    }
+
+    let mut text = String::new();
+    for page in &pages {
+        let out = tokio::process::Command::new("tesseract")
+            .arg(page)
+            .arg("stdout")
+            .arg("--psm")
+            .arg("6")
+            .output()
+            .await
+            .map_err(|e| format!("tesseract failed to start: {e}"))?;
+        if out.status.success() {
+            text.push_str(&String::from_utf8_lossy(&out.stdout));
+            text.push('\n');
+        }
+    }
+    if text.trim().is_empty() {
+        return Err("OCR found no readable text in the scanned document".into());
+    }
+    tracing::info!(pages = pages.len(), chars = text.len(), "OCR-extracted scanned PDF");
+    Ok(text)
+}
+
 const SYSTEM: &str = "You are a precise bank/credit-card statement parser. \
 From the statement text, extract EVERY individual transaction line. \
 Respond with ONLY a JSON array — no prose, no markdown code fences. \

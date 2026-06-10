@@ -33,7 +33,7 @@ pub async fn import_statement(
     bytes: &[u8],
 ) -> Result<UploadOutcome, String> {
     let text = if bytes.starts_with(b"%PDF") {
-        crate::plaid::statements::extract_text(bytes)?
+        crate::plaid::statements::extract_text_or_ocr(bytes).await?
     } else {
         String::from_utf8_lossy(bytes).to_string()
     };

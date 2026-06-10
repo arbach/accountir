@@ -1142,7 +1142,7 @@ async fn chat_upload(
     let mut extracted_any = false;
     for (fname, bytes) in &files {
         let res: Result<String, String> = if bytes.starts_with(b"%PDF") {
-            crate::plaid::statements::extract_text(bytes)
+            crate::plaid::statements::extract_text_or_ocr(bytes).await
         } else if bytes.contains(&0) {
             Err("unsupported binary format (only PDF and text/CSV are readable)".to_string())
         } else {
@@ -1939,7 +1939,7 @@ async fn banks_statement_import(
         Ok(b) => b,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("download failed: {e}")).into_response(),
     };
-    let text = match crate::plaid::statements::extract_text(&pdf) {
+    let text = match crate::plaid::statements::extract_text_or_ocr(&pdf).await {
         Ok(t) => t,
         Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, format!("pdf parse failed: {e}")).into_response(),
     };
@@ -2424,7 +2424,7 @@ async fn tax_profile_upload(
     let mut extracted_any = false;
     for (fname, bytes) in &docs {
         let extracted = if bytes.starts_with(b"%PDF") {
-            match crate::plaid::statements::extract_text(bytes) {
+            match crate::plaid::statements::extract_text_or_ocr(bytes).await {
                 Ok(t) => {
                     extracted_any = extracted_any || !t.trim().is_empty();
                     t
