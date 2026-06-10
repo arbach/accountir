@@ -63,6 +63,7 @@ struct Cfg {
     claude_bin: String,
     idle_secs: u64,
     turn_timeout_secs: u64,
+    first_event_timeout_secs: u64,
 }
 
 struct Daemon {
@@ -213,12 +214,37 @@ async fn run_turn(
         }
     }
 
-    let proc = slot.as_mut().unwrap();
     let mut forwarded = 0usize;
+    let mut respawned = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(d.cfg.turn_timeout_secs);
+    // A healthy turn emits its first stream event within seconds. Total silence
+    // means the process wedged (seen in production after multi-turn stdin use):
+    // kill it, respawn with --resume, and replay the turn once.
+    let mut first_event_deadline =
+        tokio::time::Instant::now() + Duration::from_secs(d.cfg.first_event_timeout_secs);
     loop {
-        match tokio::time::timeout_at(deadline, proc.stdout.next_line()).await {
-            Err(_) => anyhow::bail!("turn timed out after {}s", d.cfg.turn_timeout_secs),
+        let proc = slot.as_mut().unwrap();
+        let eff_deadline =
+            if forwarded == 0 { first_event_deadline.min(deadline) } else { deadline };
+        match tokio::time::timeout_at(eff_deadline, proc.stdout.next_line()).await {
+            Err(_) => {
+                if forwarded == 0 && !respawned && tokio::time::Instant::now() < deadline {
+                    tracing::warn!(company = %company_id,
+                        "no output within {}s; respawning with resume and replaying the turn",
+                        d.cfg.first_event_timeout_secs);
+                    respawned = true;
+                    *slot = None; // kill_on_drop reaps the wedged child
+                    let (sid, tok, _) = ensure_session_row(&d.pool, company_id).await?;
+                    *slot = Some(spawn_proc(&d.cfg, company_id, sid, &tok, true).await?);
+                    let proc = slot.as_mut().unwrap();
+                    proc.stdin.write_all(line.as_bytes()).await?;
+                    proc.stdin.flush().await?;
+                    first_event_deadline = tokio::time::Instant::now()
+                        + Duration::from_secs(d.cfg.first_event_timeout_secs);
+                    continue;
+                }
+                anyhow::bail!("turn timed out after {}s", d.cfg.turn_timeout_secs);
+            }
             Ok(Ok(Some(l))) => {
                 let Ok(v) = serde_json::from_str::<Value>(&l) else { continue };
                 let done = v.get("type").and_then(|t| t.as_str()) == Some("result");
@@ -231,10 +257,25 @@ async fn run_turn(
                 }
             }
             Ok(Ok(None)) | Ok(Err(_)) => {
-                // Stream closed mid-turn. If we got nothing at all, the stored
-                // session likely failed to resume — drop it so the next turn
-                // starts a fresh session instead of failing forever.
+                // Stream closed mid-turn. If we got nothing at all even after a
+                // respawn, the stored session likely failed to resume — drop it
+                // so the next turn starts a fresh session instead of failing
+                // forever.
                 if forwarded == 0 {
+                    if !respawned {
+                        tracing::warn!(company = %company_id,
+                            "stream closed with no output; respawning with resume and replaying the turn");
+                        respawned = true;
+                        *slot = None;
+                        let (sid, tok, _) = ensure_session_row(&d.pool, company_id).await?;
+                        *slot = Some(spawn_proc(&d.cfg, company_id, sid, &tok, true).await?);
+                        let proc = slot.as_mut().unwrap();
+                        proc.stdin.write_all(line.as_bytes()).await?;
+                        proc.stdin.flush().await?;
+                        first_event_deadline = tokio::time::Instant::now()
+                            + Duration::from_secs(d.cfg.first_event_timeout_secs);
+                        continue;
+                    }
                     let _ = sqlx::query("DELETE FROM agent_sessions WHERE company_id = $1")
                         .bind(company_id)
                         .execute(&d.pool)
@@ -244,7 +285,7 @@ async fn run_turn(
             }
         }
     }
-    proc.last_used = Instant::now();
+    slot.as_mut().unwrap().last_used = Instant::now();
     Ok(())
 }
 
@@ -450,6 +491,9 @@ async fn main() -> anyhow::Result<()> {
         claude_bin: env_or("CLAUDE_BIN", &format!("{home}/.local/bin/claude")),
         idle_secs: env_or("AGENT_IDLE_SECS", "1800").parse().unwrap_or(1800),
         turn_timeout_secs: env_or("AGENT_TURN_TIMEOUT_SECS", "600").parse().unwrap_or(600),
+        first_event_timeout_secs: env_or("AGENT_FIRST_EVENT_TIMEOUT_SECS", "120")
+            .parse()
+            .unwrap_or(120),
     };
     tokio::fs::create_dir_all(&cfg.state_dir).await?;
 
