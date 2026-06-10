@@ -58,6 +58,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/chat", get(chat_view))
         .route("/app/chat/messages", post(chat_send))
         .route("/app/chat/stream", post(chat_stream))
+        .route("/app/chat/history", get(chat_history))
         .route("/app/chat/clear", post(chat_clear_route))
         .route("/app/dashboard", get(dashboard))
         .route("/app/transactions", get(transactions_list))
@@ -1064,6 +1065,28 @@ async fn chat_stream(
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
         .map(|v| Ok::<_, std::convert::Infallible>(Event::default().data(v.to_string())));
     Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+}
+
+/// JSON history for the floating chat widget: flat [{role, body}] lines.
+async fn chat_history(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let history = crate::ai::chat::load_history(&state.pool, user.id, company_id)
+        .await
+        .unwrap_or_default();
+    let lines: Vec<serde_json::Value> = history
+        .iter()
+        .map(render_chat_message)
+        .flat_map(|g| g.lines)
+        .map(|l| serde_json::json!({ "role": l.role, "body": l.body }))
+        .collect();
+    Json(serde_json::json!({ "lines": lines })).into_response()
 }
 
 async fn chat_clear_route(State(state): State<AppState>, jar: CookieJar) -> Response {

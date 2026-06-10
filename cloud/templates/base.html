@@ -373,5 +373,100 @@
     {% block body %}{% endblock %}
   </main>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  {% if user_email.is_some() %}
+  <!-- Floating AI chat widget (bottom-right, all app pages) -->
+  <style>
+    #aiw-fab { position: fixed; right: 22px; bottom: 22px; width: 54px; height: 54px; border-radius: 50%;
+      background: var(--accent, #2563eb); color: #fff; border: none; cursor: pointer; font-size: 24px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.25); z-index: 9000; }
+    #aiw-panel { position: fixed; right: 22px; bottom: 88px; width: 370px; max-width: calc(100vw - 44px);
+      height: 520px; max-height: calc(100vh - 130px); display: none; flex-direction: column;
+      background: var(--bg, #fff); border: 1px solid var(--border, #ddd); border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.3); z-index: 9001; overflow: hidden; }
+    #aiw-panel.open { display: flex; }
+    #aiw-head { padding: 10px 14px; border-bottom: 1px solid var(--border, #ddd); display: flex;
+      justify-content: space-between; align-items: center; font-weight: 600; font-size: 14px; }
+    #aiw-msgs { flex: 1; overflow-y: auto; padding: 12px 14px; font-size: 13px; }
+    #aiw-msgs .aiw-role { font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+      color: var(--text-3, #888); margin: 10px 0 2px; }
+    #aiw-msgs .aiw-body { white-space: pre-wrap; }
+    #aiw-form { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--border, #ddd); }
+    #aiw-form input { flex: 1; font-size: 13px; }
+  </style>
+  <button id="aiw-fab" title="AI accountant">&#128172;</button>
+  <div id="aiw-panel" role="dialog" aria-label="AI accountant">
+    <div id="aiw-head"><span>AI accountant &middot; {{ nav.active_company_name }}</span>
+      <span><a href="/app/chat" style="font-weight:400;font-size:12px;">Full view</a>
+      <button id="aiw-close" class="btn btn-ghost" style="padding:2px 8px;">&times;</button></span></div>
+    <div id="aiw-msgs"><div class="muted" style="font-size:12px;">Loading&hellip;</div></div>
+    <form id="aiw-form"><input id="aiw-input" type="text" placeholder="Ask about your books&hellip;" autocomplete="off">
+      <button type="submit" class="btn btn-primary" id="aiw-send">Send</button></form>
+  </div>
+  <script>
+  (function () {
+    var fab = document.getElementById('aiw-fab'), panel = document.getElementById('aiw-panel');
+    var msgs = document.getElementById('aiw-msgs'), form = document.getElementById('aiw-form');
+    var input = document.getElementById('aiw-input'), send = document.getElementById('aiw-send');
+    var loaded = false;
+
+    function line(role, body) {
+      var r = document.createElement('div'); r.className = 'aiw-role'; r.textContent = role;
+      var b = document.createElement('div'); b.className = 'aiw-body'; b.textContent = body || '';
+      msgs.appendChild(r); msgs.appendChild(b); msgs.scrollTop = msgs.scrollHeight; return b;
+    }
+    async function loadHistory() {
+      try {
+        var r = await fetch('/app/chat/history'); var d = await r.json();
+        msgs.innerHTML = '';
+        if (!d.lines || !d.lines.length) { line('assistant', "Hi! I'm your AI accountant. Ask me anything about this company's books."); return; }
+        d.lines.forEach(function (l) { line(l.role, l.body); });
+      } catch (e) { msgs.innerHTML = ''; line('assistant', '(could not load history)'); }
+    }
+    fab.addEventListener('click', function () {
+      panel.classList.toggle('open');
+      if (panel.classList.contains('open')) { if (!loaded) { loaded = true; loadHistory(); } input.focus(); }
+    });
+    document.getElementById('aiw-close').addEventListener('click', function () { panel.classList.remove('open'); });
+
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      var text = input.value.trim(); if (!text) return;
+      input.value = ''; input.disabled = true; send.disabled = true; send.textContent = '\u2026';
+      line('user', text);
+      var live = line('assistant', '');
+      function handle(ev) {
+        if (ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
+            && ev.event.delta && ev.event.delta.type === 'text_delta') {
+          live.textContent += ev.event.delta.text; msgs.scrollTop = msgs.scrollHeight;
+        } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
+          ev.message.content.forEach(function (blk) {
+            if (blk.type === 'text' && blk.text) { live.textContent = blk.text; live = line('assistant', ''); }
+            else if (blk.type === 'tool_use') { line('assistant \u00b7 tool (' + (blk.name || '?') + ')', ''); live = line('assistant', ''); }
+          });
+        } else if (ev.type === 'daemon_error') { live.textContent = '(agent error: ' + (ev.error || '?') + ')'; }
+      }
+      try {
+        var resp = await fetch('/app/chat/stream', { method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'message=' + encodeURIComponent(text) });
+        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+        var reader = resp.body.getReader(); var dec = new TextDecoder(); var buf = '';
+        while (true) {
+          var r = await reader.read(); if (r.done) break;
+          buf += dec.decode(r.value, { stream: true });
+          var i; while ((i = buf.indexOf('\n\n')) >= 0) {
+            var frame = buf.slice(0, i); buf = buf.slice(i + 2);
+            var data = frame.split('\n').filter(function (l) { return l.indexOf('data:') === 0; })
+              .map(function (l) { return l.slice(5).trim(); }).join('');
+            if (data) { try { handle(JSON.parse(data)); } catch (_) {} }
+          }
+        }
+        if (!live.textContent) { live.previousSibling && msgs.removeChild(live.previousSibling); msgs.removeChild(live); }
+      } catch (err) { live.textContent = '(error: ' + err.message + ')'; }
+      input.disabled = false; send.disabled = false; send.textContent = 'Send'; input.focus();
+    });
+  })();
+  </script>
+  {% endif %}
 </body>
 </html>
