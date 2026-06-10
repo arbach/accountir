@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Acquire;
@@ -99,10 +100,29 @@ h.open();}
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Resolve which company this user is acting as.
-/// For now: the user's first membership (alphabetical by created_at).
-/// A future enhancement is an X-Company-Id header.
-async fn resolve_company_id(state: &AppState, user_id: Uuid) -> AppResult<Uuid> {
+/// Cookie that records which company the user is currently acting as
+/// (must match the web layer's value).
+const ACTIVE_COMPANY_COOKIE: &str = "accountir_active_company";
+
+/// Resolve which company this user is acting as. Honors the active-company
+/// cookie (same as the web UI's company switcher); falls back to the user's
+/// first membership only when no valid cookie is present.
+async fn resolve_company_id(
+    state: &AppState,
+    jar: &CookieJar,
+    user_id: Uuid,
+) -> AppResult<Uuid> {
+    if let Some(c) = jar.get(ACTIVE_COMPANY_COOKIE) {
+        if let Ok(uuid) = Uuid::parse_str(c.value()) {
+            if crate::queries::user_has_membership(&state.pool, user_id, uuid)
+                .await
+                .unwrap_or(false)
+            {
+                return Ok(uuid);
+            }
+        }
+    }
+
     let row: Option<(Uuid,)> = sqlx::query_as(
         "SELECT company_id FROM memberships WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1",
     )
@@ -208,9 +228,10 @@ struct ExchangeTokenResponse {
 async fn exchange_token(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    jar: CookieJar,
     Json(req): Json<ExchangeTokenRequest>,
 ) -> AppResult<Json<ExchangeTokenResponse>> {
-    let company_id = resolve_company_id(&state, user.id).await?;
+    let company_id = resolve_company_id(&state, &jar, user.id).await?;
 
     let exchange = plaid_client(&state)
         .exchange_public_token(&req.public_token)
@@ -328,9 +349,10 @@ struct SyncResponse {
 async fn sync(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    jar: CookieJar,
     Json(req): Json<SyncRequest>,
 ) -> AppResult<Json<SyncResponse>> {
-    let company_id = resolve_company_id(&state, user.id).await?;
+    let company_id = resolve_company_id(&state, &jar, user.id).await?;
     let item_uuid = Uuid::parse_str(&req.item_id)
         .map_err(|_| AppError::BadRequest("item_id must be a uuid".into()))?;
 
@@ -517,9 +539,10 @@ struct BalancesResponse {
 async fn balances(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    jar: CookieJar,
     Json(req): Json<SyncRequest>,
 ) -> AppResult<Json<BalancesResponse>> {
-    let company_id = resolve_company_id(&state, user.id).await?;
+    let company_id = resolve_company_id(&state, &jar, user.id).await?;
     let item_uuid = Uuid::parse_str(&req.item_id)
         .map_err(|_| AppError::BadRequest("item_id must be a uuid".into()))?;
 
