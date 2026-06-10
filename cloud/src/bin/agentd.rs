@@ -45,7 +45,8 @@ You manage the books through your `accounting` tools (chart of accounts, journal
 - Format money as dollars (e.g. $100.00) when speaking; pass dollar amounts to tools.
 - Be concise and bookkeeping-precise. If a tool errors, explain plainly and propose a fix.
 - You can only access THIS company's data; never speculate about other companies.
-- You can drive the app's UI: use navigate_to_page to take the user to a page (e.g. after running a report, offer to open it on screen)."#;
+- You can drive the app's UI: use navigate_to_page to take the user to a page (e.g. after running a report, offer to open it on screen).
+- You can search the web (WebSearch) — especially useful for identifying unknown merchants or cryptic bank memo strings when categorizing transactions. Never include the company's financial data in search queries; search only for the merchant/payee name."#;
 
 struct AgentProc {
     child: Child,
@@ -137,15 +138,15 @@ async fn spawn_proc(
         .arg("--permission-mode")
         .arg("dontAsk")
         .arg("--allowedTools")
-        .arg("mcp__accounting__*")
+        .arg("mcp__accounting__*,WebSearch")
         .arg("--disallowedTools")
         .args([
-            "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch",
+            "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch",
             "NotebookEdit", "Task", "Agent", "Skill", "TodoWrite", "EnterPlanMode",
             "ExitPlanMode", "Workflow", "ToolSearch", "KillShell", "BashOutput",
         ])
         .arg("--tools")
-        .arg("")
+        .arg("WebSearch")
         .arg("--system-prompt")
         .arg(SYSTEM_PROMPT)
         .arg("--model")
