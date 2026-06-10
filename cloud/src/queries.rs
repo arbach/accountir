@@ -376,14 +376,14 @@ pub async fn income_statement(
     let rows = sqlx::query(
         r#"
         SELECT a.account_type::text, a.account_number, a.name,
-               COALESCE(SUM(jl.amount), 0)::BIGINT AS sum_amount
+               SUM(jl.amount)::BIGINT AS sum_amount
         FROM accounts a
-        LEFT JOIN journal_lines jl ON jl.account_id = a.id
-        LEFT JOIN journal_entries je ON je.id = jl.entry_id AND je.is_void = false
-            AND je.date BETWEEN $1 AND $2
+        JOIN journal_lines jl ON jl.account_id = a.id
+        JOIN journal_entries je ON je.id = jl.entry_id
         WHERE a.is_active = true AND a.account_type IN ('revenue', 'expense')
+          AND je.is_void = false AND je.date BETWEEN $1 AND $2
         GROUP BY a.id, a.account_type, a.account_number, a.name
-        HAVING COALESCE(SUM(jl.amount), 0) <> 0
+        HAVING SUM(jl.amount) <> 0
         ORDER BY a.account_number ASC
         "#,
     )
@@ -470,15 +470,15 @@ pub async fn balance_sheet(pool: &PgPool, company_id: Uuid, as_of: NaiveDate) ->
     let rows = sqlx::query(
         r#"
         SELECT a.account_type::text, a.account_number, a.name,
-               COALESCE(SUM(jl.amount), 0)::BIGINT AS sum_amount
+               SUM(jl.amount)::BIGINT AS sum_amount
         FROM accounts a
-        LEFT JOIN journal_lines jl ON jl.account_id = a.id
-        LEFT JOIN journal_entries je ON je.id = jl.entry_id AND je.is_void = false
-            AND je.date <= $1
+        JOIN journal_lines jl ON jl.account_id = a.id
+        JOIN journal_entries je ON je.id = jl.entry_id
         WHERE a.is_active = true
           AND a.account_type IN ('asset', 'liability', 'equity')
+          AND je.is_void = false AND je.date <= $1
         GROUP BY a.id, a.account_type, a.account_number, a.name
-        HAVING COALESCE(SUM(jl.amount), 0) <> 0
+        HAVING SUM(jl.amount) <> 0
         ORDER BY a.account_number ASC
         "#,
     )
@@ -585,7 +585,8 @@ pub async fn cash_flow(
         JOIN accounts a ON a.id = jl.account_id
         JOIN journal_entries je ON je.id = jl.entry_id AND je.is_void = false
         WHERE a.account_type = 'asset'
-          AND (a.name ILIKE '%cash%' OR a.name ILIKE '%bank%' OR a.name ILIKE '%checking%' OR a.name ILIKE '%savings%')
+          AND (a.name ILIKE '%cash%' OR a.name ILIKE '%bank%' OR a.name ILIKE '%checking%' OR a.name ILIKE '%savings%'
+               OR a.id IN (SELECT local_account_id FROM plaid_local_accounts WHERE local_account_id IS NOT NULL))
           AND je.date < $1
         "#,
     )
@@ -599,7 +600,8 @@ pub async fn cash_flow(
         JOIN accounts a ON a.id = jl.account_id
         JOIN journal_entries je ON je.id = jl.entry_id AND je.is_void = false
         WHERE a.account_type = 'asset'
-          AND (a.name ILIKE '%cash%' OR a.name ILIKE '%bank%' OR a.name ILIKE '%checking%' OR a.name ILIKE '%savings%')
+          AND (a.name ILIKE '%cash%' OR a.name ILIKE '%bank%' OR a.name ILIKE '%checking%' OR a.name ILIKE '%savings%'
+               OR a.id IN (SELECT local_account_id FROM plaid_local_accounts WHERE local_account_id IS NOT NULL))
           AND je.date <= $1
         "#,
     )
@@ -618,14 +620,16 @@ pub async fn cash_flow(
             WHERE je.is_void = false
               AND je.date BETWEEN $1 AND $2
               AND a.account_type = 'asset'
-              AND (a.name ILIKE '%cash%' OR a.name ILIKE '%bank%' OR a.name ILIKE '%checking%' OR a.name ILIKE '%savings%')
+              AND (a.name ILIKE '%cash%' OR a.name ILIKE '%bank%' OR a.name ILIKE '%checking%' OR a.name ILIKE '%savings%'
+                   OR a.id IN (SELECT local_account_id FROM plaid_local_accounts WHERE local_account_id IS NOT NULL))
         )
         SELECT a.account_number, a.name, COALESCE(SUM(jl.amount), 0)::BIGINT AS amt
         FROM cash_entries ce
         JOIN journal_lines jl ON jl.entry_id = ce.entry_id
         JOIN accounts a ON a.id = jl.account_id
         WHERE NOT (a.account_type = 'asset'
-                   AND (a.name ILIKE '%cash%' OR a.name ILIKE '%bank%' OR a.name ILIKE '%checking%' OR a.name ILIKE '%savings%'))
+                   AND (a.name ILIKE '%cash%' OR a.name ILIKE '%bank%' OR a.name ILIKE '%checking%' OR a.name ILIKE '%savings%'
+                        OR a.id IN (SELECT local_account_id FROM plaid_local_accounts WHERE local_account_id IS NOT NULL)))
         GROUP BY a.id, a.account_number, a.name
         HAVING COALESCE(SUM(jl.amount), 0) <> 0
         ORDER BY a.account_number ASC
