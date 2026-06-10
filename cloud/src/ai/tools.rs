@@ -149,6 +149,30 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": { "type": "object", "properties": {} }
         }),
         json!({
+            "name": "void_entry",
+            "description": "Void a journal entry (reversible). Use this to undo a posted entry instead of posting a manual reversal. Get the entry_id from list_recent_entries or list_transactions.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {"type": "string", "description": "UUID of the journal entry"},
+                    "reason": {"type": "string", "description": "Why it's being voided"}
+                },
+                "required": ["entry_id"]
+            }
+        }),
+        json!({
+            "name": "unvoid_entry",
+            "description": "Restore a previously voided journal entry.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {"type": "string", "description": "UUID of the journal entry"},
+                    "reason": {"type": "string"}
+                },
+                "required": ["entry_id"]
+            }
+        }),
+        json!({
             "name": "navigate_to_page",
             "description": "Navigate the user's browser to a page of this app. Use when the user asks to see/open/go to a page, or to show them the result of your work. Available pages: /app/dashboard, /app/invoices (sales), /app/transactions, /app/entries (journal), /app/accounts (chart of accounts), /app/banks, /app/banks/link, /app/reports, /app/reports/trial-balance, /app/reports/income-statement?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/reports/balance-sheet?as_of=YYYY-MM-DD, /app/reports/cash-flow?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/chat, /app/admin/companies, /app/admin/members, /app/admin/settings.",
             "input_schema": {
@@ -182,6 +206,8 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "get_account_balance" => get_account_balance_tool(ctx, input).await,
         "create_account" => create_account_tool(ctx, input).await,
         "post_journal_entry" => post_entry_tool(ctx, input).await,
+        "void_entry" => void_entry_tool(ctx, input, false).await,
+        "unvoid_entry" => void_entry_tool(ctx, input, true).await,
         "trial_balance" => trial_balance_tool(ctx).await,
         "income_statement" => income_statement_tool(ctx, input).await,
         "balance_sheet" => balance_sheet_tool(ctx, input).await,
@@ -499,6 +525,30 @@ async fn create_account_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
     .await
     {
         Ok(id) => json!({ "ok": true, "account_id": id, "account_number": acct_num, "name": name }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn void_entry_tool(ctx: &ToolContext<'_>, input: &Value, unvoid: bool) -> Value {
+    let Some(entry_id) = input
+        .get("entry_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return json!({ "error": "entry_id must be a UUID" });
+    };
+    let reason = input
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or(if unvoid { "unvoided by AI agent" } else { "voided by AI agent" })
+        .to_string();
+    let res = if unvoid {
+        crate::commands::mutations::unvoid_entry(ctx.pool, ctx.company_id, ctx.user_id, entry_id, reason).await
+    } else {
+        crate::commands::mutations::void_entry(ctx.pool, ctx.company_id, ctx.user_id, entry_id, reason).await
+    };
+    match res {
+        Ok(_) => json!({ "ok": true, "entry_id": entry_id, "voided": !unvoid }),
         Err(e) => json!({ "error": format!("{e}") }),
     }
 }
