@@ -1655,17 +1655,6 @@ async fn banks_statement_import(
         Err(_) => return (StatusCode::BAD_REQUEST, "bad item id").into_response(),
     };
 
-    let api_key = match state.config.anthropic_api_key.clone() {
-        Some(k) => k,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Statement parsing needs ANTHROPIC_API_KEY configured on the server.",
-            )
-                .into_response()
-        }
-    };
-
     let access_token = match item_access_token(&state, company_id, item_uuid).await {
         Ok(t) => t,
         Err(r) => return r,
@@ -1680,7 +1669,7 @@ async fn banks_statement_import(
         Ok(t) => t,
         Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, format!("pdf parse failed: {e}")).into_response(),
     };
-    let lines = match crate::plaid::statements::parse_with_ai(&api_key, &text).await {
+    let lines = match crate::plaid::statements::parse_with_ai(&text).await {
         Ok(l) => l,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("ai parse failed: {e}")).into_response(),
     };

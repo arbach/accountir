@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-fn agentd_url() -> String {
+pub fn agentd_url() -> String {
     std::env::var("AGENTD_URL")
         .ok()
         .filter(|s| !s.is_empty())

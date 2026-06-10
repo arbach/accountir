@@ -6,9 +6,7 @@
 //! a normalized list of transactions, which are then staged for user review.
 
 use serde::Deserialize;
-use serde_json::json;
-
-use crate::ai::anthropic::{AnthropicClient, Message};
+use serde_json::{json, Value};
 
 /// One parsed transaction line from a statement.
 #[derive(Debug, Clone, Deserialize)]
@@ -41,28 +39,32 @@ Infer the full year from the statement period/closing date. \
 Do NOT include running balances, summaries, totals, interest-rate lines, or marketing text — only real transactions. \
 If there are no transactions, respond with [].";
 
-/// Parse statement text into transaction lines using Claude.
-pub async fn parse_with_ai(api_key: &str, statement_text: &str) -> Result<Vec<ParsedLine>, String> {
+/// Parse statement text into transaction lines using the Claude CLI via the
+/// agent daemon's stateless /oneshot endpoint (subscription auth, no API key).
+pub async fn parse_with_ai(statement_text: &str) -> Result<Vec<ParsedLine>, String> {
     // Bound input to keep the request within sane size/cost limits.
     let text: String = statement_text.chars().take(60_000).collect();
-    let client = AnthropicClient::new(api_key.to_string());
-    let messages = vec![Message {
-        role: "user".to_string(),
-        content: json!(format!("Statement text:\n\n{text}")),
-    }];
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(620))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
     let resp = client
-        .create_message(SYSTEM, &messages, None)
+        .post(format!("{}/oneshot", crate::ai::agent::agentd_url()))
+        .json(&json!({
+            "system": SYSTEM,
+            "prompt": format!("Statement text:\n\n{text}"),
+        }))
+        .send()
         .await
-        .map_err(|e| format!("anthropic error: {e}"))?;
-
-    let mut out = String::new();
-    for block in &resp.content {
-        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-            if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
-                out.push_str(t);
-            }
-        }
+        .map_err(|e| format!("agent daemon unreachable: {e}"))?;
+    let body: Value = resp.json().await.map_err(|e| format!("bad daemon reply: {e}"))?;
+    if !body["ok"].as_bool().unwrap_or(false) {
+        return Err(format!(
+            "agent parse failed: {}",
+            body["error"].as_str().unwrap_or("unknown")
+        ));
     }
+    let out = body["result"].as_str().unwrap_or("").to_string();
 
     let json_str = extract_json_array(&out);
     serde_json::from_str::<Vec<ParsedLine>>(&json_str).map_err(|e| {

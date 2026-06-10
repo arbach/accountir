@@ -277,6 +277,77 @@ async fn turn(State(d): State<Arc<Daemon>>, Json(req): Json<TurnReq>) -> Json<Va
 }
 
 #[derive(Deserialize)]
+struct OneshotReq {
+    prompt: String,
+    system: Option<String>,
+    model: Option<String>,
+}
+
+/// Stateless one-shot completion (no session, no tools, no MCP). Used for
+/// batch text work like statement parsing, on the same subscription auth.
+async fn oneshot(State(d): State<Arc<Daemon>>, Json(req): Json<OneshotReq>) -> Json<Value> {
+    let mut cmd = Command::new(&d.cfg.claude_bin);
+    cmd.arg("-p")
+        .arg("--output-format")
+        .arg("json")
+        .arg("--strict-mcp-config")
+        .arg("--tools")
+        .arg("")
+        .arg("--disallowedTools")
+        .args(["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch"])
+        .arg("--permission-mode")
+        .arg("dontAsk")
+        .arg("--model")
+        .arg(req.model.as_deref().unwrap_or(&d.cfg.model))
+        .current_dir(&d.cfg.state_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    if let Some(s) = &req.system {
+        cmd.arg("--system-prompt").arg(s);
+    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return Json(json!({ "ok": false, "error": format!("spawn: {e}") })),
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        if stdin.write_all(req.prompt.as_bytes()).await.is_err() {
+            return Json(json!({ "ok": false, "error": "failed to write prompt" }));
+        }
+        // dropping stdin closes it; claude treats the piped text as the prompt
+    }
+    let out = match tokio::time::timeout(
+        Duration::from_secs(d.cfg.turn_timeout_secs),
+        child.wait_with_output(),
+    )
+    .await
+    {
+        Err(_) => return Json(json!({ "ok": false, "error": "oneshot timed out" })),
+        Ok(Err(e)) => return Json(json!({ "ok": false, "error": format!("wait: {e}") })),
+        Ok(Ok(o)) => o,
+    };
+    let parsed: Value = match serde_json::from_slice(&out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            return Json(json!({
+                "ok": false,
+                "error": format!("bad CLI output ({e}); exit={:?}", out.status.code())
+            }))
+        }
+    };
+    let is_error = parsed.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+    let result = parsed.get("result").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    tracing::info!(
+        chars_in = req.prompt.len(),
+        chars_out = result.len(),
+        cost = parsed.get("total_cost_usd").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        "oneshot completed"
+    );
+    Json(json!({ "ok": !is_error && !result.is_empty(), "result": result }))
+}
+
+#[derive(Deserialize)]
 struct ResetReq {
     company_id: Uuid,
 }
@@ -367,6 +438,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/turn", post(turn))
         .route("/reset", post(reset))
+        .route("/oneshot", post(oneshot))
         .route("/health", get(health))
         .with_state(d);
     tracing::info!(%bind, "starting accountir-agentd");
