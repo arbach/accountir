@@ -35,7 +35,7 @@
     {% endif %}
   </div>
   <form id="chat-form" method="post" action="/app/chat/messages" style="border-top: 1px solid var(--border); padding: 12px 14px; display: flex; gap: 8px;">
-    <input type="file" id="chat-file" accept=".pdf,.csv,.txt,.md,.json" style="display:none;">
+    <input type="file" id="chat-file" accept=".pdf,.csv,.txt,.md,.json" multiple style="display:none;">
     <button type="button" class="btn btn-ghost" id="chat-attach" title="Upload a file for the AI (PDF, CSV, text)">&#128206;</button>
     <input id="chat-input" type="text" name="message" placeholder="Ask anything…" required autofocus autocomplete="off" style="flex: 1;">
     <button id="chat-send" type="submit" class="btn btn-primary">Send</button>
@@ -154,15 +154,27 @@
     });
   });
 
-  var fileInput = document.getElementById('chat-file');
-  document.getElementById('chat-attach').addEventListener('click', function () { fileInput.click(); });
-  fileInput.addEventListener('change', function () {
-    if (!fileInput.files.length) return;
-    var f = fileInput.files[0]; fileInput.value = '';
-    var fd = new FormData(); fd.append('file', f, f.name);
-    runTurn('📎 Uploaded: ' + f.name, function () {
+  function uploadFiles(fileList) {
+    var fs = Array.prototype.slice.call(fileList); if (!fs.length) return;
+    var fd = new FormData();
+    fs.forEach(function (f) { fd.append('file', f, f.name); });
+    var names = fs.map(function (f) { return f.name; }).join(', ');
+    runTurn('📎 Uploaded: ' + names, function () {
       return fetch('/app/chat/upload', { method: 'POST', body: fd });
     });
+  }
+  var fileInput = document.getElementById('chat-file');
+  document.getElementById('chat-attach').addEventListener('click', function () { fileInput.click(); });
+  fileInput.addEventListener('change', function () { uploadFiles(fileInput.files); fileInput.value = ''; });
+  // Drag & drop onto the conversation.
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    box.addEventListener(ev, function (e) { e.preventDefault(); box.style.outline = '2px dashed var(--accent, #2563eb)'; box.style.outlineOffset = '-6px'; });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    box.addEventListener(ev, function (e) { e.preventDefault(); box.style.outline = ''; });
+  });
+  box.addEventListener('drop', function (e) {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) { uploadFiles(e.dataTransfer.files); }
   });
 })();
 </script>

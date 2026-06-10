@@ -1114,55 +1114,75 @@ async fn chat_upload(
         None => return forbidden(),
     };
 
-    let mut file: Option<(String, Vec<u8>)> = None;
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     while let Ok(Some(field)) = multipart.next_field().await {
         if field.name() == Some("file") {
             let fname = field.file_name().unwrap_or("file").to_string();
             match field.bytes().await {
-                Ok(b) => file = Some((fname, b.to_vec())),
+                Ok(b) => {
+                    if !b.is_empty() {
+                        files.push((fname, b.to_vec()));
+                    }
+                }
                 Err(e) => {
                     return (StatusCode::BAD_REQUEST, format!("upload failed: {e}")).into_response()
                 }
             }
         }
     }
-    let Some((fname, bytes)) = file else {
-        return (StatusCode::BAD_REQUEST, "no file in upload").into_response();
-    };
-    if bytes.is_empty() {
-        return (StatusCode::BAD_REQUEST, "uploaded file is empty").into_response();
+    if files.is_empty() {
+        return (StatusCode::BAD_REQUEST, "no files in upload").into_response();
     }
 
-    let text = if bytes.starts_with(b"%PDF") {
-        match crate::plaid::statements::extract_text(&bytes) {
-            Ok(t) => t,
+    // Extract each file; an unreadable one becomes a note for the agent rather
+    // than failing the whole batch. One shared text budget across all files.
+    const TOTAL_BUDGET: usize = 80_000;
+    let mut remaining = TOTAL_BUDGET;
+    let mut sections = String::new();
+    let mut extracted_any = false;
+    for (fname, bytes) in &files {
+        let res: Result<String, String> = if bytes.starts_with(b"%PDF") {
+            crate::plaid::statements::extract_text(bytes)
+        } else if bytes.contains(&0) {
+            Err("unsupported binary format (only PDF and text/CSV are readable)".to_string())
+        } else {
+            Ok(String::from_utf8_lossy(bytes).to_string())
+        };
+        match res {
+            Ok(text) if !text.trim().is_empty() => {
+                let content: String = text.chars().take(remaining).collect();
+                let truncated = content.chars().count() < text.chars().count();
+                remaining = remaining.saturating_sub(content.chars().count());
+                extracted_any = true;
+                sections.push_str(&format!(
+                    "=== File: \"{fname}\"{} ===\n{content}\n=== End of \"{fname}\" ===\n\n",
+                    if truncated { " (truncated)" } else { "" }
+                ));
+            }
+            Ok(_) => sections
+                .push_str(&format!("=== File: \"{fname}\" — no text could be extracted ===\n\n")),
             Err(e) => {
-                return (StatusCode::UNPROCESSABLE_ENTITY, format!("pdf parse failed: {e}"))
-                    .into_response()
+                sections.push_str(&format!("=== File: \"{fname}\" — could not read: {e} ===\n\n"))
             }
         }
-    } else if bytes.contains(&0) {
+    }
+    if !extracted_any {
         return (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "only PDF and text files (CSV, TXT, …) are supported",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "no text could be extracted from any of the files (only PDF and text/CSV are supported)",
         )
             .into_response();
-    } else {
-        String::from_utf8_lossy(&bytes).to_string()
-    };
-    if text.trim().is_empty() {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "no text could be extracted").into_response();
     }
-    let content: String = text.chars().take(60_000).collect();
-    let truncated = content.len() < text.len();
 
+    let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
     let agent_text = format!(
-        "[The user uploaded a file in chat: \"{fname}\"{}. Its extracted text follows.]\n\n{content}\n\n\
-         [End of \"{fname}\". Briefly say what the file appears to contain, then ask what the user \
-         would like done with it — unless their intent is already clear from the conversation.]",
-        if truncated { " (truncated to the first 60,000 characters)" } else { "" }
+        "[The user uploaded {} file(s) in chat: {}. Their extracted text follows.]\n\n{sections}\
+         [End of uploaded files. Briefly say what each file appears to contain, then ask what the \
+         user would like done with them — unless their intent is already clear from the conversation.]",
+        files.len(),
+        names.join(", "),
     );
-    let display = format!("📎 Uploaded: {fname}");
+    let display = format!("📎 Uploaded: {}", names.join(", "));
 
     let (tx, rx) = tokio::sync::mpsc::channel::<serde_json::Value>(64);
     let pool = state.pool.clone();

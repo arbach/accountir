@@ -531,6 +531,7 @@
     #aiw-msgs .aiw-body { white-space: pre-wrap; }
     #aiw-form { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--border, #ddd); }
     #aiw-form input { flex: 1; font-size: 13px; }
+    #aiw-panel.aiw-drag { outline: 2px dashed var(--accent, #2563eb); outline-offset: -6px; }
   </style>
   <button id="aiw-fab" title="AI accountant">&#128172;</button>
   <div id="aiw-panel" role="dialog" aria-label="AI accountant" data-company="{{ nav.active_company_name }}">
@@ -539,7 +540,7 @@
       <button id="aiw-close" class="btn btn-ghost" style="padding:2px 8px;">&times;</button></span></div>
     <div id="aiw-msgs"><div class="muted" style="font-size:12px;">Loading&hellip;</div></div>
     <form id="aiw-form">
-      <input type="file" id="aiw-file" accept=".pdf,.csv,.txt,.md,.json" style="display:none;">
+      <input type="file" id="aiw-file" accept=".pdf,.csv,.txt,.md,.json" multiple style="display:none;">
       <button type="button" class="btn btn-ghost" id="aiw-attach" title="Upload a file for the AI (PDF, CSV, text)" style="padding:4px 8px;">&#128206;</button>
       <input id="aiw-input" type="text" placeholder="Ask about your books&hellip;" autocomplete="off">
       <button type="submit" class="btn btn-primary" id="aiw-send">Send</button></form>
@@ -699,15 +700,32 @@
       });
     });
 
+    function uploadFiles(fileList) {
+      var fs = Array.prototype.slice.call(fileList); if (!fs.length) return;
+      var fd = new FormData();
+      fs.forEach(function (f) { fd.append('file', f, f.name); });
+      var names = fs.map(function (f) { return f.name; }).join(', ');
+      runTurn('\ud83d\udcce Uploaded: ' + names, function () {
+        return fetch('/app/chat/upload', { method: 'POST', body: fd });
+      });
+    }
     var fileInput = document.getElementById('aiw-file');
     document.getElementById('aiw-attach').addEventListener('click', function () { fileInput.click(); });
     fileInput.addEventListener('change', function () {
-      if (!fileInput.files.length) return;
-      var f = fileInput.files[0]; fileInput.value = '';
-      var fd = new FormData(); fd.append('file', f, f.name);
-      runTurn('\ud83d\udcce Uploaded: ' + f.name, function () {
-        return fetch('/app/chat/upload', { method: 'POST', body: fd });
-      });
+      uploadFiles(fileInput.files); fileInput.value = '';
+    });
+    // Drag & drop anywhere on the panel.
+    ['dragenter', 'dragover'].forEach(function (ev) {
+      panel.addEventListener(ev, function (e) { e.preventDefault(); panel.classList.add('aiw-drag'); });
+    });
+    ['dragleave', 'drop'].forEach(function (ev) {
+      panel.addEventListener(ev, function (e) { e.preventDefault(); panel.classList.remove('aiw-drag'); });
+    });
+    panel.addEventListener('drop', function (e) {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+        if (!panel.classList.contains('open')) { openPanel(); }
+        uploadFiles(e.dataTransfer.files);
+      }
     });
   })();
   </script>
