@@ -451,6 +451,12 @@
   // Render markdown into an element, accumulating raw text for streaming.
   function mdSet(el, text) { el._md = text; el.style.whiteSpace = 'normal'; el.innerHTML = mdHtml(text); }
   function mdAppend(el, delta) { mdSet(el, (el._md || '') + delta); }
+  // Animated "agent is working" indicator (three bouncing dots).
+  function typingEl() {
+    var d = document.createElement('div'); d.className = 'ai-typing';
+    d.innerHTML = '<span></span><span></span><span></span>';
+    return d;
+  }
   </script>
   <style>
     .md-h { font-weight: 700; margin: 8px 0 3px; }
@@ -465,6 +471,12 @@
     .md-table { border-collapse: collapse; margin: 6px 0; font-size: .95em; }
     .md-table th, .md-table td { border: 1px solid var(--border, #ccc); padding: 3px 8px; text-align: left; }
     .md-table th { background: rgba(127,127,127,.1); }
+    .ai-typing { padding: 6px 0 2px; }
+    .ai-typing span { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%;
+      background: var(--text-3, #888); animation: aiTypB 1.2s infinite ease-in-out; }
+    .ai-typing span:nth-child(2) { animation-delay: .2s; }
+    .ai-typing span:nth-child(3) { animation-delay: .4s; }
+    @keyframes aiTypB { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
   </style>
   {% if user_email.is_some() %}
   <!-- Floating AI chat widget (bottom-right, all app pages) -->
@@ -575,7 +587,11 @@
       panel.classList.add('open'); loaded = true;
       loadHistory().then(function () {
         var p = getPending();
-        if (p) { pollForAnswer(p.q, line('assistant', '(working\u2026)')); }
+        if (p) {
+          var ind = line('assistant', '');
+          ind.appendChild(typingEl()); msgs.scrollTop = msgs.scrollHeight;
+          pollForAnswer(p.q, ind);
+        }
       });
     }
     var draft = sget('aiwDraft'); if (draft) { input.value = draft; }
@@ -587,6 +603,8 @@
       input.value = ''; sdel('aiwDraft'); setBusy(true);
       line('user', text);
       var live = line('assistant', '');
+      var typing = typingEl();
+      msgs.appendChild(typing); msgs.scrollTop = msgs.scrollHeight;
       var pendingNav = null;
       setPending(text);
       function handle(ev) {
@@ -602,6 +620,7 @@
             }
           });
         } else if (ev.type === 'daemon_error') { live.textContent = '(agent error: ' + (ev.error || '?') + ')'; }
+        msgs.appendChild(typing); msgs.scrollTop = msgs.scrollHeight;
       }
       try {
         var resp = await fetch('/app/chat/stream', { method: 'POST',
@@ -619,13 +638,15 @@
             if (data) { try { handle(JSON.parse(data)); } catch (_) {} }
           }
         }
-        sdel('aiwPending');
+        sdel('aiwPending'); typing.remove();
         if (!live.textContent && !(live._md || '').trim()) { live.previousSibling && msgs.removeChild(live.previousSibling); msgs.removeChild(live); }
         setBusy(false);
       } catch (err) {
         // Connection dropped but the turn keeps running server-side; fall back
         // to polling history for the answer.
         live.textContent = '(connection lost \u2014 waiting for the answer\u2026)';
+        live.appendChild(typingEl());
+        typing.remove();
         pollForAnswer(text, live);
       }
       if (pendingNav) { setTimeout(function () { window.location = pendingNav; }, 400); }

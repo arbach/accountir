@@ -78,6 +78,8 @@
     input.disabled = true; sendBtn.disabled = true; sendBtn.textContent = 'Thinking…';
     bubble('user', text);
     var live = bubble('assistant', '');
+    var typing = typingEl();
+    box.appendChild(typing); box.scrollTop = box.scrollHeight;
     var pendingNav = null;
 
     function handle(ev) {
@@ -103,6 +105,7 @@
       } else if (ev.type === 'daemon_error') {
         live.textContent = '(agent error: ' + (ev.error || 'unknown') + ')';
       }
+      box.appendChild(typing); box.scrollTop = box.scrollHeight;
     }
 
     try {
@@ -128,6 +131,7 @@
           try { handle(JSON.parse(data)); } catch (_) {}
         }
       }
+      typing.remove();
       // Navigate if the agent drove the UI; otherwise reload for canonical history.
       if (pendingNav) { window.location = pendingNav; } else { window.location.reload(); }
     } catch (err) {
