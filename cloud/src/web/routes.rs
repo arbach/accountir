@@ -70,6 +70,11 @@ pub fn router() -> Router<AppState> {
         )
         .route("/app/chat/clear", post(chat_clear_route))
         .route("/app/dashboard", get(dashboard))
+        .route("/app/tax", get(tax_filing))
+        .route("/app/tax/profile", post(tax_profile_save))
+        .route("/app/tax/forms/{id}/pdf", get(tax_form_pdf))
+        .route("/app/tax/forms/{id}/approve", post(tax_form_approve))
+        .route("/app/tax/forms/{id}/delete", post(tax_form_delete))
         .route("/app/reports/tax-documents", get(tax_documents))
         .route("/app/reports/tax-documents/generate", post(tax_documents_generate))
         .route("/app/reports/tax-documents/print-all", get(tax_documents_print_all))
@@ -2238,6 +2243,189 @@ async fn entry_unvoid(
     };
     let _ = unvoid_entry(&state.pool, company_id, user.id, entry_uuid, "unvoided via UI".into()).await;
     Redirect::to("/app/transactions").into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Tax filing pipeline (profile → review → pull → fill → approve → mail)
+// ---------------------------------------------------------------------------
+
+#[derive(Template)]
+#[template(path = "tax_filing.html")]
+struct TaxFilingTpl {
+    user_email: Option<String>,
+    flash: Option<String>,
+    flash_kind: Option<String>,
+    nav: NavCtx,
+    profile_entity: String,
+    profile_legal_name: String,
+    profile_ein: String,
+    profile_line1: String,
+    profile_line2: String,
+    profile_city: String,
+    profile_state: String,
+    profile_zip: String,
+    forms: Vec<crate::tax::TaxFormRow>,
+    lob_configured: bool,
+}
+
+async fn tax_filing(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let profile = crate::tax::get_profile(&state.pool, company_id).await.unwrap_or(None);
+    let addr_field = |k: &str| -> String {
+        profile
+            .as_ref()
+            .and_then(|p| p.address.get(k))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let (profile_line1, profile_line2, profile_city, profile_state, profile_zip) = (
+        addr_field("line1"),
+        addr_field("line2"),
+        addr_field("city"),
+        addr_field("state"),
+        addr_field("zip"),
+    );
+    let forms = crate::tax::list_forms(&state.pool, company_id).await.unwrap_or_default();
+    render(TaxFilingTpl {
+        user_email: Some(user.email),
+        flash: None,
+        flash_kind: None,
+        nav: build_nav(&state, &jar, user.id).await,
+        profile_entity: profile.as_ref().map(|p| p.entity_type.clone()).unwrap_or_default(),
+        profile_legal_name: profile.as_ref().map(|p| p.legal_name.clone()).unwrap_or_default(),
+        profile_ein: profile.as_ref().map(|p| p.ein.clone()).unwrap_or_default(),
+        profile_line1,
+        profile_line2,
+        profile_city,
+        profile_state,
+        profile_zip,
+        forms,
+        lob_configured: crate::tax::lob::configured(),
+    })
+}
+
+#[derive(Deserialize)]
+struct TaxProfileForm {
+    entity_type: String,
+    legal_name: String,
+    ein: String,
+    line1: String,
+    line2: Option<String>,
+    city: String,
+    state: String,
+    zip: String,
+}
+
+async fn tax_profile_save(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Form(req): Form<TaxProfileForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let address = serde_json::json!({
+        "line1": req.line1, "line2": req.line2.unwrap_or_default(),
+        "city": req.city, "state": req.state, "zip": req.zip,
+    });
+    if let Err(e) = crate::tax::set_profile(
+        &state.pool,
+        company_id,
+        &req.entity_type,
+        &req.legal_name,
+        &req.ein,
+        &address,
+    )
+    .await
+    {
+        tracing::error!(error = ?e, "tax profile save failed");
+    }
+    Redirect::to("/app/tax").into_response()
+}
+
+async fn tax_form_pdf(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let _ = user;
+    let form_id = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad form id").into_response(),
+    };
+    match crate::tax::get_form(&state.pool, company_id, form_id).await {
+        Ok(Some(f)) => match std::fs::read(&f.file_path) {
+            Ok(bytes) => (
+                [(axum::http::header::CONTENT_TYPE, "application/pdf")],
+                bytes,
+            )
+                .into_response(),
+            Err(_) => (StatusCode::NOT_FOUND, "form file missing").into_response(),
+        },
+        Ok(None) => (StatusCode::NOT_FOUND, "form not found").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "could not load form").into_response(),
+    }
+}
+
+async fn tax_form_approve(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let _ = user;
+    if let Ok(form_id) = Uuid::parse_str(&id) {
+        let _ = crate::tax::approve_form(&state.pool, company_id, form_id).await;
+    }
+    Redirect::to("/app/tax").into_response()
+}
+
+async fn tax_form_delete(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let _ = user;
+    if let Ok(form_id) = Uuid::parse_str(&id) {
+        let _ = crate::tax::delete_form(&state.pool, company_id, form_id).await;
+    }
+    Redirect::to("/app/tax").into_response()
 }
 
 // ---------------------------------------------------------------------------

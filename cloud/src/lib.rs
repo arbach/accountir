@@ -11,5 +11,6 @@ pub mod plaid;
 pub mod queries;
 pub mod statement_upload;
 pub mod store;
+pub mod tax;
 pub mod tenant;
 pub mod web;

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Tax Filing · Maven{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div><h1>Tax Filing</h1><div class="subtitle">Step-by-step: profile → books review → pull forms → complete → approve → mail</div></div>
+</div>
+
+{% if !lob_configured %}
+<div class="flash err" style="margin-bottom: var(--gap);">
+  Lob mailing is not configured — set <code>LOB_API_KEY</code> in <code>/etc/accountir-cloud/env</code> (start with a <code>test_</code> key). Everything up to the mail step works without it.
+</div>
+{% endif %}
+
+<div class="card" style="margin-bottom: var(--gap);">
+  <div class="card-title">How it works</div>
+  <ol style="margin: 8px 0 4px 18px; font-size: 14px; line-height: 1.7;">
+    <li><strong>Tax profile</strong> — entity type, legal name, EIN, mailing address (form below).</li>
+    <li><strong>Books review</strong> — ask the AI assistant to "review the accounting for the tax year"; it runs the full protocol (transfers, duplicates, credit cards) before any numbers are used.</li>
+    <li><strong>Pull forms</strong> — the assistant downloads the official IRS PDFs it determines you need (e.g. Schedule C, 4562, 1099-NEC).</li>
+    <li><strong>Complete</strong> — the assistant fills the forms from your ledger, line by line.</li>
+    <li><strong>Approve</strong> — you review each filled PDF below and click Approve. Nothing can be mailed without this.</li>
+    <li><strong>Mail</strong> — the assistant (or you) mails approved forms via Lob, certified by default, with delivery tracking.</li>
+  </ol>
+  <div class="muted" style="font-size: 12px;">Start by telling the AI assistant: <em>"prepare my {{ nav.active_company_name }} taxes"</em>.</div>
+</div>
+
+<div class="card" style="margin-bottom: var(--gap);">
+  <div class="card-title">Step 1 · Tax profile</div>
+  <form method="post" action="/app/tax/profile">
+    <div class="form-row" style="grid-template-columns: 1fr 2fr 1fr; align-items: end;">
+      <label class="field"><span class="label-text">Entity type</span>
+        <select name="entity_type">
+          <option value="schedule_c" {% if profile_entity == "schedule_c" %}selected{% endif %}>Sole prop / single-member LLC (Schedule C)</option>
+          <option value="s_corp" {% if profile_entity == "s_corp" %}selected{% endif %}>S corporation (1120-S)</option>
+          <option value="partnership" {% if profile_entity == "partnership" %}selected{% endif %}>Partnership (1065)</option>
+          <option value="c_corp" {% if profile_entity == "c_corp" %}selected{% endif %}>C corporation (1120)</option>
+        </select>
+      </label>
+      <label class="field"><span class="label-text">Legal name</span>
+        <input type="text" name="legal_name" value="{{ profile_legal_name }}" required></label>
+      <label class="field"><span class="label-text">EIN</span>
+        <input type="text" name="ein" value="{{ profile_ein }}" placeholder="XX-XXXXXXX"></label>
+    </div>
+    <div class="form-row" style="grid-template-columns: 2fr 1fr 1fr 80px 110px auto; align-items: end;">
+      <label class="field"><span class="label-text">Address line 1</span><input type="text" name="line1" value="{{ profile_line1 }}" required></label>
+      <label class="field"><span class="label-text">Line 2</span><input type="text" name="line2" value="{{ profile_line2 }}"></label>
+      <label class="field"><span class="label-text">City</span><input type="text" name="city" value="{{ profile_city }}" required></label>
+      <label class="field"><span class="label-text">State</span><input type="text" name="state" value="{{ profile_state }}" maxlength="2" required></label>
+      <label class="field"><span class="label-text">ZIP</span><input type="text" name="zip" value="{{ profile_zip }}" required></label>
+      <div style="padding-bottom: 12px;"><button type="submit" class="btn btn-primary">Save profile</button></div>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-title">Forms in the pipeline</div>
+  {% if forms.is_empty() %}
+  <p class="muted" style="font-size: 13px;">No forms yet. Ask the AI assistant to start your tax filing — it pulls the right IRS forms and completes them from the ledger.</p>
+  {% else %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Form</th><th style="width:70px">Year</th><th style="width:100px">Status</th><th>Mailing</th><th style="width:250px"></th></tr></thead>
+    <tbody>
+    {% for f in forms %}
+      <tr>
+        <td><a href="/app/tax/forms/{{ f.id }}/pdf" target="_blank">{{ f.title }}</a></td>
+        <td>{{ f.year }}</td>
+        <td><span class="badge">{{ f.status }}</span></td>
+        <td class="muted" style="font-size:12px;">
+          {% if f.lob_id.is_some() %}{{ f.lob_status.as_deref().unwrap_or("") }} · {{ f.lob_id.as_deref().unwrap_or("") }} · {{ f.mailed_display() }}{% else %}—{% endif %}
+        </td>
+        <td>
+          <a href="/app/tax/forms/{{ f.id }}/pdf" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" target="_blank">View PDF</a>
+          {% if f.status.as_str() == "filled" %}
+          <form method="post" action="/app/tax/forms/{{ f.id }}/approve" style="display:inline;" onsubmit="return confirm('Approve this form for mailing? Review the PDF first.')">
+            <button class="btn btn-primary" style="padding:2px 10px; font-size:12px;">Approve</button>
+          </form>
+          {% endif %}
+          {% if f.status.as_str() != "mailed" %}
+          <form method="post" action="/app/tax/forms/{{ f.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this form?')">
+            <button class="btn btn-danger" style="padding:2px 10px; font-size:12px;">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

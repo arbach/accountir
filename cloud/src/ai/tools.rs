@@ -149,6 +149,84 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": { "type": "object", "properties": {} }
         }),
         json!({
+            "name": "get_tax_profile",
+            "description": "Get the company's tax profile (entity type, legal name, EIN, mailing address). Needed before filling or mailing tax forms.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "set_tax_profile",
+            "description": "Save the company's tax profile. Ask the user for any values you don't have — never invent an EIN or address.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {"type": "string", "enum": ["schedule_c", "s_corp", "partnership", "c_corp"]},
+                    "legal_name": {"type": "string"},
+                    "ein": {"type": "string"},
+                    "address": {"type": "object", "properties": {
+                        "line1": {"type": "string"}, "line2": {"type": "string"},
+                        "city": {"type": "string"}, "state": {"type": "string"}, "zip": {"type": "string"}
+                    }}
+                },
+                "required": ["entity_type", "legal_name", "address"]
+            }
+        }),
+        json!({
+            "name": "fetch_tax_form",
+            "description": "Download an official IRS form PDF from irs.gov and register it in the Tax Filing pipeline. form is the IRS file code, e.g. f1040sc (Schedule C), f1120s (1120-S), f1065, f1099nec, f4562. Returns the form_id and its fillable field names.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "form": {"type": "string", "description": "IRS form file code, lowercase, e.g. f1040sc"},
+                    "year": {"type": "integer", "description": "Tax year this filing is for"},
+                    "title": {"type": "string", "description": "Optional display title"}
+                },
+                "required": ["form", "year"]
+            }
+        }),
+        json!({
+            "name": "get_tax_form_fields",
+            "description": "List the fillable fields (names, types, current values, checkbox states) of a pulled tax form.",
+            "input_schema": {
+                "type": "object",
+                "properties": { "form_id": {"type": "string"} },
+                "required": ["form_id"]
+            }
+        }),
+        json!({
+            "name": "fill_tax_form",
+            "description": "Fill values into a pulled tax form's PDF fields (cumulative — only the fields you pass change). values maps exact field names from get_tax_form_fields to strings; for checkboxes pass true/false. After filling, tell the user to review and Approve the form on /app/tax before it can be mailed.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "form_id": {"type": "string"},
+                    "values": {"type": "object", "description": "field name -> value"}
+                },
+                "required": ["form_id", "values"]
+            }
+        }),
+        json!({
+            "name": "list_tax_forms",
+            "description": "List the company's tax forms in the filing pipeline with their status (pulled, filled, approved, mailed) and Lob mailing info.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "mail_tax_form",
+            "description": "Physically mail an APPROVED tax form via Lob (print + post). Refuses forms the user hasn't approved on /app/tax. Provide the destination address (e.g. the correct IRS service center for the form and the company's state — verify it on irs.gov first). Use certified=true for tax returns. Always restate the destination and get an explicit yes from the user in chat before calling this.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "form_id": {"type": "string"},
+                    "to": {"type": "object", "properties": {
+                        "name": {"type": "string"}, "address_line1": {"type": "string"},
+                        "address_line2": {"type": "string"}, "address_city": {"type": "string"},
+                        "address_state": {"type": "string"}, "address_zip": {"type": "string"}
+                    }, "required": ["name", "address_line1", "address_city", "address_state", "address_zip"]},
+                    "certified": {"type": "boolean", "default": true}
+                },
+                "required": ["form_id", "to"]
+            }
+        }),
+        json!({
             "name": "create_report",
             "description": "Generate a saved report document that appears under Reports → Tax Documents and can be saved as PDF. Use type 'tax_package' to complete the full year-end tax documents (income statement + balance sheet + cash flow + trial balance for a year). Returns the document URL — navigate the user there afterwards.",
             "input_schema": {
@@ -190,7 +268,7 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "navigate_to_page",
-            "description": "Navigate the user's browser to a page of this app. Use when the user asks to see/open/go to a page, or to show them the result of your work. Available pages: /app/dashboard, /app/invoices (sales), /app/transactions, /app/entries (journal), /app/accounts (chart of accounts), /app/banks, /app/banks/link, /app/reports, /app/reports/trial-balance, /app/reports/income-statement?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/reports/balance-sheet?as_of=YYYY-MM-DD, /app/reports/cash-flow?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/reports/tax-documents, /app/reports/documents/<id>, /app/chat, /app/admin/companies, /app/admin/members, /app/admin/settings.",
+            "description": "Navigate the user's browser to a page of this app. Use when the user asks to see/open/go to a page, or to show them the result of your work. Available pages: /app/dashboard, /app/invoices (sales), /app/transactions, /app/entries (journal), /app/accounts (chart of accounts), /app/banks, /app/banks/link, /app/reports, /app/reports/trial-balance, /app/reports/income-statement?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/reports/balance-sheet?as_of=YYYY-MM-DD, /app/reports/cash-flow?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/reports/tax-documents, /app/reports/documents/<id>, /app/tax, /app/chat, /app/admin/companies, /app/admin/members, /app/admin/settings.",
             "input_schema": {
                 "type": "object",
                 "properties": { "page": {"type": "string", "description": "App path starting with /app/, optionally with query params"} },
@@ -223,6 +301,13 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "create_account" => create_account_tool(ctx, input).await,
         "post_journal_entry" => post_entry_tool(ctx, input).await,
         "create_report" => create_report_tool(ctx, input).await,
+        "get_tax_profile" => get_tax_profile_tool(ctx).await,
+        "set_tax_profile" => set_tax_profile_tool(ctx, input).await,
+        "fetch_tax_form" => fetch_tax_form_tool(ctx, input).await,
+        "get_tax_form_fields" => tax_form_fields_tool(ctx, input).await,
+        "fill_tax_form" => fill_tax_form_tool(ctx, input).await,
+        "list_tax_forms" => list_tax_forms_tool(ctx).await,
+        "mail_tax_form" => mail_tax_form_tool(ctx, input).await,
         "void_entry" => void_entry_tool(ctx, input, false).await,
         "unvoid_entry" => void_entry_tool(ctx, input, true).await,
         "trial_balance" => trial_balance_tool(ctx).await,
@@ -542,6 +627,114 @@ async fn create_account_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
     .await
     {
         Ok(id) => json!({ "ok": true, "account_id": id, "account_number": acct_num, "name": name }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn get_tax_profile_tool(ctx: &ToolContext<'_>) -> Value {
+    match crate::tax::get_profile(ctx.pool, ctx.company_id).await {
+        Ok(Some(p)) => json!({
+            "entity_type": p.entity_type, "legal_name": p.legal_name,
+            "ein": p.ein, "address": p.address,
+        }),
+        Ok(None) => json!({ "profile": null, "note": "no tax profile yet — ask the user and call set_tax_profile" }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn set_tax_profile_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let entity_type = input.get("entity_type").and_then(|v| v.as_str()).unwrap_or("");
+    let legal_name = input.get("legal_name").and_then(|v| v.as_str()).unwrap_or("");
+    let ein = input.get("ein").and_then(|v| v.as_str()).unwrap_or("");
+    let address = input.get("address").cloned().unwrap_or_else(|| json!({}));
+    if entity_type.is_empty() || legal_name.is_empty() {
+        return json!({ "error": "entity_type and legal_name are required" });
+    }
+    match crate::tax::set_profile(ctx.pool, ctx.company_id, entity_type, legal_name, ein, &address)
+        .await
+    {
+        Ok(()) => json!({ "ok": true }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn fetch_tax_form_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let form = input.get("form").and_then(|v| v.as_str()).unwrap_or("");
+    let year = input.get("year").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let title = input.get("title").and_then(|v| v.as_str());
+    if form.is_empty() || year < 2000 {
+        return json!({ "error": "form and year are required" });
+    }
+    match crate::tax::fetch_form(ctx.pool, ctx.company_id, form, year, title).await {
+        Ok((id, fields)) => json!({
+            "ok": true, "form_id": id, "fields": fields,
+            "review_url": format!("/app/tax/forms/{id}/pdf"),
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn tax_form_fields_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let Some(id) = input.get("form_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return json!({ "error": "form_id must be a UUID" });
+    };
+    match crate::tax::form_fields(ctx.pool, ctx.company_id, id).await {
+        Ok(fields) => fields,
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn fill_tax_form_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let Some(id) = input.get("form_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return json!({ "error": "form_id must be a UUID" });
+    };
+    let Some(values) = input.get("values").filter(|v| v.is_object()) else {
+        return json!({ "error": "values object required" });
+    };
+    match crate::tax::fill_form(ctx.pool, ctx.company_id, id, values).await {
+        Ok(res) => json!({
+            "ok": true, "result": res,
+            "review_url": format!("/app/tax/forms/{id}/pdf"),
+            "next": "ask the user to review the PDF and click Approve on /app/tax",
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn list_tax_forms_tool(ctx: &ToolContext<'_>) -> Value {
+    match crate::tax::list_forms(ctx.pool, ctx.company_id).await {
+        Ok(rows) => json!({
+            "lob_configured": crate::tax::lob::configured(),
+            "forms": rows.iter().map(|f| json!({
+                "form_id": f.id, "year": f.year, "form": f.form_code, "title": f.title,
+                "status": f.status, "lob_id": f.lob_id, "lob_status": f.lob_status,
+                "mailed_at": f.mailed_at.map(|t| t.to_rfc3339()),
+                "review_url": format!("/app/tax/forms/{}/pdf", f.id),
+            })).collect::<Vec<_>>(),
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn mail_tax_form_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let Some(id) = input.get("form_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return json!({ "error": "form_id must be a UUID" });
+    };
+    let Some(to) = input.get("to").filter(|v| v.is_object()) else {
+        return json!({ "error": "to address object required" });
+    };
+    let certified = input.get("certified").and_then(|v| v.as_bool()).unwrap_or(true);
+    match crate::tax::mail_form(ctx.pool, ctx.company_id, id, to, certified).await {
+        Ok(letter) => json!({
+            "ok": true,
+            "lob_id": letter.get("id"),
+            "expected_delivery_date": letter.get("expected_delivery_date"),
+            "tracking_number": letter.get("tracking_number"),
+            "carrier": letter.get("carrier"),
+        }),
         Err(e) => json!({ "error": format!("{e}") }),
     }
 }
