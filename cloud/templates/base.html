@@ -402,7 +402,70 @@
     if (asof && ai)  ai.value=iso(asof);
     f.submit();
   }
+
+  // Minimal markdown → HTML for chat messages (escapes HTML first; only
+  // http(s) and in-app links allowed).
+  function mdHtml(src) {
+    function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+    var blocks = [];
+    src = (src || '').replace(/```(\w*)\n?([\s\S]*?)```/g, function (_, _lang, code) {
+      blocks.push('<pre class="md-pre">' + esc(code) + '</pre>');
+      return '\u0000' + (blocks.length - 1) + '\u0000';
+    });
+    function inline(s) {
+      s = esc(s);
+      s = s.replace(/`([^`]+)`/g, '<code class="md-code">$1</code>');
+      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      s = s.replace(/(^|[\s(])\*([^*\s][^*]*?)\*/g, '$1<em>$2</em>');
+      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|\/app\/[^)\s]*)\)/g, '<a href="$2" target="_self">$1</a>');
+      return s;
+    }
+    function table(rows) {
+      var html = '<table class="md-table">';
+      rows.forEach(function (row, i) {
+        var cells = row.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|');
+        if (cells.every(function (c) { return /^\s*:?-{2,}:?\s*$/.test(c); })) return;
+        var tag = i === 0 ? 'th' : 'td';
+        html += '<tr>' + cells.map(function (c) { return '<' + tag + '>' + inline(c.trim()) + '</' + tag + '>'; }).join('') + '</tr>';
+      });
+      return html + '</table>';
+    }
+    var out = [], inUl = false, inOl = false, tbl = null;
+    function closeLists() { if (inUl) { out.push('</ul>'); inUl = false; } if (inOl) { out.push('</ol>'); inOl = false; } }
+    function flushTbl() { if (tbl) { out.push(table(tbl)); tbl = null; } }
+    src.split('\n').forEach(function (ln) {
+      var m;
+      if (/^\s*\|.*\|\s*$/.test(ln)) { (tbl = tbl || []).push(ln); return; }
+      flushTbl();
+      if ((m = ln.match(/^(#{1,4})\s+(.*)$/))) { closeLists(); out.push('<div class="md-h md-h' + m[1].length + '">' + inline(m[2]) + '</div>'); return; }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(ln)) { closeLists(); out.push('<hr class="md-hr">'); return; }
+      if ((m = ln.match(/^\s*[-*+]\s+(.*)$/))) { if (!inUl) { closeLists(); out.push('<ul class="md-list">'); inUl = true; } out.push('<li>' + inline(m[1]) + '</li>'); return; }
+      if ((m = ln.match(/^\s*\d+[.)]\s+(.*)$/))) { if (!inOl) { closeLists(); out.push('<ol class="md-list">'); inOl = true; } out.push('<li>' + inline(m[1]) + '</li>'); return; }
+      closeLists();
+      if (ln.trim() === '') { out.push('<div class="md-sp"></div>'); return; }
+      out.push('<div>' + inline(ln) + '</div>');
+    });
+    closeLists(); flushTbl();
+    return out.join('').replace(/\u0000(\d+)\u0000/g, function (_, i) { return blocks[+i]; });
+  }
+  // Render markdown into an element, accumulating raw text for streaming.
+  function mdSet(el, text) { el._md = text; el.style.whiteSpace = 'normal'; el.innerHTML = mdHtml(text); }
+  function mdAppend(el, delta) { mdSet(el, (el._md || '') + delta); }
   </script>
+  <style>
+    .md-h { font-weight: 700; margin: 8px 0 3px; }
+    .md-h1 { font-size: 1.25em; } .md-h2 { font-size: 1.15em; } .md-h3, .md-h4 { font-size: 1.02em; }
+    .md-list { margin: 4px 0 4px 18px; padding: 0; }
+    .md-list li { margin: 2px 0; }
+    .md-sp { height: 8px; }
+    .md-hr { border: none; border-top: 1px solid var(--border, #ddd); margin: 8px 0; }
+    .md-code { background: rgba(127,127,127,.15); border-radius: 4px; padding: 1px 4px; font-size: .92em; }
+    .md-pre { background: rgba(127,127,127,.12); border-radius: 6px; padding: 8px 10px; overflow-x: auto;
+      font-size: .88em; margin: 6px 0; white-space: pre; }
+    .md-table { border-collapse: collapse; margin: 6px 0; font-size: .95em; }
+    .md-table th, .md-table td { border: 1px solid var(--border, #ccc); padding: 3px 8px; text-align: left; }
+    .md-table th { background: rgba(127,127,127,.1); }
+  </style>
   {% if user_email.is_some() %}
   <!-- Floating AI chat widget (bottom-right, all app pages) -->
   <style>
@@ -446,7 +509,8 @@
 
     function line(role, body) {
       var r = document.createElement('div'); r.className = 'aiw-role'; r.textContent = role;
-      var b = document.createElement('div'); b.className = 'aiw-body'; b.textContent = body || '';
+      var b = document.createElement('div'); b.className = 'aiw-body';
+      if (role === 'assistant') { mdSet(b, body || ''); } else { b.textContent = body || ''; }
       msgs.appendChild(r); msgs.appendChild(b); msgs.scrollTop = msgs.scrollHeight; return b;
     }
     function renderLines(lines) {
@@ -528,10 +592,10 @@
       function handle(ev) {
         if (ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
             && ev.event.delta && ev.event.delta.type === 'text_delta') {
-          live.textContent += ev.event.delta.text; msgs.scrollTop = msgs.scrollHeight;
+          mdAppend(live, ev.event.delta.text); msgs.scrollTop = msgs.scrollHeight;
         } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
           ev.message.content.forEach(function (blk) {
-            if (blk.type === 'text' && blk.text) { live.textContent = blk.text; live = line('assistant', ''); }
+            if (blk.type === 'text' && blk.text) { mdSet(live, blk.text); live = line('assistant', ''); }
             else if (blk.type === 'tool_use') {
               if ((blk.name || '').indexOf('navigate_to_page') >= 0 && blk.input && blk.input.page) { pendingNav = blk.input.page; }
               line('assistant \u00b7 tool (' + (blk.name || '?') + ')', ''); live = line('assistant', '');
@@ -556,7 +620,7 @@
           }
         }
         sdel('aiwPending');
-        if (!live.textContent) { live.previousSibling && msgs.removeChild(live.previousSibling); msgs.removeChild(live); }
+        if (!live.textContent && !(live._md || '').trim()) { live.previousSibling && msgs.removeChild(live.previousSibling); msgs.removeChild(live); }
         setBusy(false);
       } catch (err) {
         // Connection dropped but the turn keeps running server-side; fall back

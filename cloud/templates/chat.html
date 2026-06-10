@@ -18,7 +18,7 @@
       {% for line in m.lines %}
       <div style="margin-bottom: 14px;">
         <div class="muted" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;">{{ line.role }}</div>
-        <div style="white-space: pre-wrap; font-size: 14px;">{{ line.body }}</div>
+        <div style="white-space: pre-wrap; font-size: 14px;" {% if line.role == "assistant" %}data-md{% endif %}>{{ line.body }}</div>
       </div>
       {% endfor %}
     {% endfor %}
@@ -47,6 +47,13 @@
   var sendBtn = document.getElementById('chat-send');
   var box = document.getElementById('messages');
 
+  // Server-rendered history arrives as plain text; render assistant
+  // messages as markdown once the shared mdHtml helper has loaded.
+  document.addEventListener('DOMContentLoaded', function () {
+    box.querySelectorAll('[data-md]').forEach(function (el) { mdSet(el, el.textContent); });
+    box.scrollTop = box.scrollHeight;
+  });
+
   function bubble(role, body) {
     var wrap = document.createElement('div');
     wrap.style.marginBottom = '14px';
@@ -56,7 +63,7 @@
     r.textContent = role;
     var b = document.createElement('div');
     b.style.cssText = 'white-space:pre-wrap;font-size:14px;';
-    b.textContent = body || '';
+    if (role === 'assistant') { mdSet(b, body || ''); } else { b.textContent = body || ''; }
     wrap.appendChild(r); wrap.appendChild(b);
     box.appendChild(wrap);
     box.scrollTop = box.scrollHeight;
@@ -77,7 +84,7 @@
       if (ev.type === 'stream_event' && ev.event) {
         var d = ev.event;
         if (d.type === 'content_block_delta' && d.delta && d.delta.type === 'text_delta') {
-          live.textContent += d.delta.text;
+          mdAppend(live, d.delta.text);
           box.scrollTop = box.scrollHeight;
         }
       } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
@@ -85,7 +92,7 @@
           var blk = ev.message.content[i];
           if (blk.type === 'text' && blk.text) {
             // Canonical full text for this step: replace deltas, open a fresh bubble.
-            live.textContent = blk.text;
+            mdSet(live, blk.text);
             live = bubble('assistant', '');
           } else if (blk.type === 'tool_use') {
             if ((blk.name || '').indexOf('navigate_to_page') >= 0 && blk.input && blk.input.page) { pendingNav = blk.input.page; }
