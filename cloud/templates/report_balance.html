@@ -9,7 +9,7 @@
 <div class="page-header">
   <div><h1>Balance sheet</h1><div class="subtitle">As of {{ report.as_of }}</div></div>
   <div style="display: flex; gap: 8px; align-items: end;">
-    <form method="get" action="/app/reports/balance-sheet" class="actions">
+    <form method="get" action="/app/reports/balance-sheet" class="actions" data-remember="report-balance">
       <select onchange="datePreset(this)" title="Date presets">
         <option value="">Preset…</option>
         <option value="asof_today">Today</option>

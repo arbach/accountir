@@ -400,6 +400,7 @@
     if (start && si) si.value=iso(start);
     if (end && ei)   ei.value=iso(end);
     if (asof && ai)  ai.value=iso(asof);
+    if (window.saveFilters) saveFilters(f);
     f.submit();
   }
 
@@ -457,6 +458,38 @@
     d.innerHTML = '<span></span><span></span><span></span>';
     return d;
   }
+
+  // Remembered filters: forms with data-remember="key" save their values to
+  // localStorage on apply, and re-apply them when the page is opened without
+  // explicit query params. Elements with data-remember-clear="key" forget them.
+  function saveFilters(f) {
+    var k = f.getAttribute && f.getAttribute('data-remember');
+    if (!k) return;
+    var vals = {};
+    Array.prototype.forEach.call(f.elements, function (el) {
+      if (el.name) { vals[el.name] = el.value; }
+    });
+    try { localStorage.setItem('filters:' + k, JSON.stringify(vals)); } catch (_) {}
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('form[data-remember]').forEach(function (f) {
+      f.addEventListener('submit', function () { saveFilters(f); });
+      if (window.location.search !== '') return;
+      var saved = null;
+      try { saved = JSON.parse(localStorage.getItem('filters:' + f.getAttribute('data-remember')) || 'null'); } catch (_) {}
+      if (!saved) return;
+      var any = false;
+      Array.prototype.forEach.call(f.elements, function (el) {
+        if (el.name && saved[el.name] !== undefined && saved[el.name] !== '') { el.value = saved[el.name]; any = true; }
+      });
+      if (any) { f.submit(); }
+    });
+    document.querySelectorAll('[data-remember-clear]').forEach(function (a) {
+      a.addEventListener('click', function () {
+        try { localStorage.removeItem('filters:' + a.getAttribute('data-remember-clear')); } catch (_) {}
+      });
+    });
+  });
   </script>
   <style>
     .md-h { font-weight: 700; margin: 8px 0 3px; }

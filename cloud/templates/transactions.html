@@ -5,7 +5,7 @@
   <div><h1>Transactions</h1><div class="subtitle">{{ rows.len() }} lines · all journal-line activity</div></div>
 </div>
 
-<form method="get" action="/app/transactions" class="card" style="margin-bottom: var(--gap);">
+<form method="get" action="/app/transactions" class="card" style="margin-bottom: var(--gap);" data-remember="transactions">
   <div class="form-row" style="grid-template-columns: repeat(5, 1fr); align-items: end;">
     <label class="field"><span class="label-text">Preset</span><select onchange="datePreset(this)" title="Date presets">
         <option value="">Preset…</option>
@@ -49,7 +49,7 @@
     <label class="field"><span class="label-text">Search memo</span><input type="text" name="search" value="{{ search.as_deref().unwrap_or("") }}" placeholder="text in memo"></label>
     <div style="display: flex; gap: 6px; align-items: end; padding-bottom: 12px;">
       <button type="submit" class="btn btn-secondary">Apply</button>
-      <a href="/app/transactions" class="btn btn-ghost">Clear</a>
+      <a href="/app/transactions?cleared=1" class="btn btn-ghost" data-remember-clear="transactions">Clear</a>
     </div>
   </div>
 </form>

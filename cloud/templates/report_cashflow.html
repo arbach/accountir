@@ -11,7 +11,7 @@
     <div class="subtitle">{{ report.start }} → {{ report.end }} <span class="muted">· simplified v1</span></div>
   </div>
   <div style="display: flex; gap: 8px; align-items: end;">
-    <form method="get" action="/app/reports/cash-flow" class="actions">
+    <form method="get" action="/app/reports/cash-flow" class="actions" data-remember="report-cashflow">
       <select onchange="datePreset(this)" title="Date presets">
         <option value="">Preset…</option>
         <option value="this_month">This month</option>

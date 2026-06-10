@@ -9,7 +9,7 @@
 <div class="page-header">
   <div><h1>Income statement</h1><div class="subtitle">{{ report.start }} → {{ report.end }}</div></div>
   <div style="display: flex; gap: 8px; align-items: end;">
-    <form method="get" action="/app/reports/income-statement" class="actions">
+    <form method="get" action="/app/reports/income-statement" class="actions" data-remember="report-income">
       <select onchange="datePreset(this)" title="Date presets">
         <option value="">Preset…</option>
         <option value="this_month">This month</option>
