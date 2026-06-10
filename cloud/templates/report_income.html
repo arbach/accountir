@@ -39,7 +39,7 @@
       <tr><td colspan="2" class="muted">No revenue in period</td></tr>
     {% else %}
       {% for r in report.revenues %}
-        <tr><td>{{ r.account_number }} &nbsp; {{ r.name }}</td><td class="num">{{ r.amount_display() }}</td></tr>
+        <tr><td><a href="/app/transactions?account_id={{ r.account_id }}&start={{ report.start }}&end={{ report.end }}" title="See the transactions behind this number">{{ r.account_number }} &nbsp; {{ r.name }}</a></td><td class="num"><a href="/app/transactions?account_id={{ r.account_id }}&start={{ report.start }}&end={{ report.end }}" title="See the transactions behind this number">{{ r.amount_display() }}</a></td></tr>
       {% endfor %}
     {% endif %}
     <tr><td><strong>Total revenue</strong></td><td class="num"><strong>{{ report.total_revenue_display() }}</strong></td></tr>
@@ -49,7 +49,7 @@
       <tr><td colspan="2" class="muted">No expenses in period</td></tr>
     {% else %}
       {% for e in report.expenses %}
-        <tr><td>{{ e.account_number }} &nbsp; {{ e.name }}</td><td class="num">{{ e.amount_display() }}</td></tr>
+        <tr><td><a href="/app/transactions?account_id={{ e.account_id }}&start={{ report.start }}&end={{ report.end }}" title="See the transactions behind this number">{{ e.account_number }} &nbsp; {{ e.name }}</a></td><td class="num"><a href="/app/transactions?account_id={{ e.account_id }}&start={{ report.start }}&end={{ report.end }}" title="See the transactions behind this number">{{ e.amount_display() }}</a></td></tr>
       {% endfor %}
     {% endif %}
     <tr><td><strong>Total expenses</strong></td><td class="num"><strong>{{ report.total_expense_display() }}</strong></td></tr>

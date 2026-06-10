@@ -337,6 +337,7 @@ pub async fn dashboard_kpis(pool: &PgPool, company_id: Uuid) -> AppResult<Dashbo
 
 #[derive(Debug, Clone)]
 pub struct ReportLine {
+    pub account_id: Uuid,
     pub account_number: String,
     pub name: String,
     pub amount_cents: i64,
@@ -376,7 +377,7 @@ pub async fn income_statement(
     let rows = sqlx::query(
         r#"
         SELECT a.account_type::text, a.account_number, a.name,
-               SUM(jl.amount)::BIGINT AS sum_amount
+               SUM(jl.amount)::BIGINT AS sum_amount, a.id
         FROM accounts a
         JOIN journal_lines jl ON jl.account_id = a.id
         JOIN journal_entries je ON je.id = jl.entry_id
@@ -405,6 +406,7 @@ pub async fn income_statement(
                 let amount = -sum; // credit-normal → positive
                 total_rev += amount;
                 revenues.push(ReportLine {
+                    account_id: r.get(4),
                     account_number: r.get(1),
                     name: r.get(2),
                     amount_cents: amount,
@@ -414,6 +416,7 @@ pub async fn income_statement(
                 let amount = sum; // debit-normal → positive as expense
                 total_exp += amount;
                 expenses.push(ReportLine {
+                    account_id: r.get(4),
                     account_number: r.get(1),
                     name: r.get(2),
                     amount_cents: amount,
@@ -470,7 +473,7 @@ pub async fn balance_sheet(pool: &PgPool, company_id: Uuid, as_of: NaiveDate) ->
     let rows = sqlx::query(
         r#"
         SELECT a.account_type::text, a.account_number, a.name,
-               SUM(jl.amount)::BIGINT AS sum_amount
+               SUM(jl.amount)::BIGINT AS sum_amount, a.id
         FROM accounts a
         JOIN journal_lines jl ON jl.account_id = a.id
         JOIN journal_entries je ON je.id = jl.entry_id
@@ -519,17 +522,17 @@ pub async fn balance_sheet(pool: &PgPool, company_id: Uuid, as_of: NaiveDate) ->
         match t.as_str() {
             "asset" => {
                 total_assets += sum;
-                assets.push(ReportLine { account_number: r.get(1), name: r.get(2), amount_cents: sum });
+                assets.push(ReportLine { account_id: r.get(4), account_number: r.get(1), name: r.get(2), amount_cents: sum });
             }
             "liability" => {
                 let amt = -sum;
                 total_liab += amt;
-                liabilities.push(ReportLine { account_number: r.get(1), name: r.get(2), amount_cents: amt });
+                liabilities.push(ReportLine { account_id: r.get(4), account_number: r.get(1), name: r.get(2), amount_cents: amt });
             }
             "equity" => {
                 let amt = -sum;
                 total_equity += amt;
-                equity.push(ReportLine { account_number: r.get(1), name: r.get(2), amount_cents: amt });
+                equity.push(ReportLine { account_id: r.get(4), account_number: r.get(1), name: r.get(2), amount_cents: amt });
             }
             _ => {}
         }
@@ -623,7 +626,7 @@ pub async fn cash_flow(
               AND (a.name ILIKE '%cash%' OR a.name ILIKE '%bank%' OR a.name ILIKE '%checking%' OR a.name ILIKE '%savings%'
                    OR a.id IN (SELECT local_account_id FROM plaid_local_accounts WHERE local_account_id IS NOT NULL))
         )
-        SELECT a.account_number, a.name, COALESCE(SUM(jl.amount), 0)::BIGINT AS amt
+        SELECT a.account_number, a.name, COALESCE(SUM(jl.amount), 0)::BIGINT AS amt, a.id
         FROM cash_entries ce
         JOIN journal_lines jl ON jl.entry_id = ce.entry_id
         JOIN accounts a ON a.id = jl.account_id
@@ -644,6 +647,7 @@ pub async fn cash_flow(
     let by_other_account: Vec<ReportLine> = breakdown
         .into_iter()
         .map(|r| ReportLine {
+            account_id: r.get(3),
             account_number: r.get(0),
             name: r.get(1),
             amount_cents: -r.get::<i64, _>(2), // sign-flip: cash inflow corresponds to credit on counterpart

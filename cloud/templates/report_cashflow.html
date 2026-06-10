@@ -60,7 +60,7 @@
   <thead><tr><th>Counterpart account</th><th class="num" style="width:160px">Effect on cash</th></tr></thead>
   <tbody>
   {% for r in report.by_other_account %}
-    <tr><td>{{ r.account_number }} &nbsp; {{ r.name }}</td><td class="num">{{ r.amount_display() }}</td></tr>
+    <tr><td><a href="/app/transactions?account_id={{ r.account_id }}&start={{ report.start }}&end={{ report.end }}" title="See the transactions behind this number">{{ r.account_number }} &nbsp; {{ r.name }}</a></td><td class="num"><a href="/app/transactions?account_id={{ r.account_id }}&start={{ report.start }}&end={{ report.end }}" title="See the transactions behind this number">{{ r.amount_display() }}</a></td></tr>
   {% endfor %}
   </tbody>
 </table>

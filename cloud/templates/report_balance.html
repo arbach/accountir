@@ -33,7 +33,7 @@
         <tr><td colspan="2" class="muted">No asset balances</td></tr>
       {% else %}
         {% for r in report.assets %}
-        <tr><td>{{ r.account_number }} &nbsp; {{ r.name }}</td><td class="num">{{ r.amount_display() }}</td></tr>
+        <tr><td><a href="/app/transactions?account_id={{ r.account_id }}&end={{ report.as_of }}" title="See the transactions behind this number">{{ r.account_number }} &nbsp; {{ r.name }}</a></td><td class="num"><a href="/app/transactions?account_id={{ r.account_id }}&end={{ report.as_of }}" title="See the transactions behind this number">{{ r.amount_display() }}</a></td></tr>
         {% endfor %}
       {% endif %}
     </tbody>
@@ -50,7 +50,7 @@
         <tr><td colspan="2" class="muted">No liabilities</td></tr>
       {% else %}
         {% for r in report.liabilities %}
-        <tr><td>{{ r.account_number }} &nbsp; {{ r.name }}</td><td class="num">{{ r.amount_display() }}</td></tr>
+        <tr><td><a href="/app/transactions?account_id={{ r.account_id }}&end={{ report.as_of }}" title="See the transactions behind this number">{{ r.account_number }} &nbsp; {{ r.name }}</a></td><td class="num"><a href="/app/transactions?account_id={{ r.account_id }}&end={{ report.as_of }}" title="See the transactions behind this number">{{ r.amount_display() }}</a></td></tr>
         {% endfor %}
       {% endif %}
       <tr><td>Total liabilities</td><td class="num">{{ report.total_liab_display() }}</td></tr>
@@ -60,7 +60,7 @@
         <tr><td colspan="2" class="muted">No equity accounts</td></tr>
       {% else %}
         {% for r in report.equity %}
-        <tr><td>{{ r.account_number }} &nbsp; {{ r.name }}</td><td class="num">{{ r.amount_display() }}</td></tr>
+        <tr><td><a href="/app/transactions?account_id={{ r.account_id }}&end={{ report.as_of }}" title="See the transactions behind this number">{{ r.account_number }} &nbsp; {{ r.name }}</a></td><td class="num"><a href="/app/transactions?account_id={{ r.account_id }}&end={{ report.as_of }}" title="See the transactions behind this number">{{ r.amount_display() }}</a></td></tr>
         {% endfor %}
       {% endif %}
       <tr><td>Current year net income</td><td class="num">{{ report.net_income_display() }}</td></tr>
