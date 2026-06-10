@@ -20,7 +20,7 @@
 {% else %}
 <div class="table-wrap">
 <table>
-  <thead><tr><th style="width:80px">Number</th><th>Name</th><th style="width:120px">Type</th><th style="width:80px">Currency</th></tr></thead>
+  <thead><tr><th style="width:80px">Number</th><th>Name</th><th style="width:120px">Type</th><th style="width:80px">Currency</th><th style="width:170px"></th></tr></thead>
   <tbody>
   {% for a in accounts %}
     <tr>
@@ -28,6 +28,12 @@
       <td>{{ a.name }}</td>
       <td><span class="badge">{{ a.account_type }}</span></td>
       <td class="muted">{{ a.currency.as_deref().unwrap_or("—") }}</td>
+      <td>
+        <form method="post" action="/app/accounts/{{ a.id }}/upload-statement" enctype="multipart/form-data" style="display:inline;">
+          <input type="file" name="statement" accept=".pdf,.csv,.txt" style="display:none;" onchange="if (this.files.length) { this.form.querySelector('button').textContent = 'Parsing…'; this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit(); }">
+          <button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" title="Upload a bank statement (PDF or CSV). Transactions are AI-parsed and added to this account; duplicates already in the ledger are skipped." onclick="this.form.querySelector('input[type=file]').click()">Upload statement</button>
+        </form>
+      </td>
     </tr>
   {% endfor %}
   </tbody>

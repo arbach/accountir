@@ -32,6 +32,11 @@ pub fn router() -> Router<AppState> {
         .route("/logout", post(logout_submit))
         .route("/app/accounts", get(accounts_list).post(account_create))
         .route("/app/accounts/new", get(account_new))
+        .route(
+            "/app/accounts/{id}/upload-statement",
+            post(account_statement_upload)
+                .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
         .route("/app/entries", get(entries_list).post(entry_create))
         .route("/app/entries/new", get(entry_new))
         .route("/app/entries/lines/new", get(entry_line_fragment))
@@ -1693,6 +1698,88 @@ async fn banks_statements(
         and uses AI to extract its transactions (up to Plaid's 2-year statement window).</p>\
         <table><thead><tr><th>Account</th><th>Period</th><th></th></tr></thead><tbody>{rows}</tbody></table>\
         </body></html>"
+    );
+    Html(page).into_response()
+}
+
+/// POST /app/accounts/{id}/upload-statement — user uploads a statement file
+/// (PDF or CSV/text); we AI-parse it and post the lines to that account,
+/// merging with what's already in the ledger (same date + amount = duplicate).
+async fn account_statement_upload(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let account_uuid = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad account id").into_response(),
+    };
+
+    let mut file: Option<(String, Vec<u8>)> = None;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("statement") {
+            let fname = field.file_name().unwrap_or("statement").to_string();
+            match field.bytes().await {
+                Ok(b) => file = Some((fname, b.to_vec())),
+                Err(e) => {
+                    return (StatusCode::BAD_REQUEST, format!("upload failed: {e}")).into_response()
+                }
+            }
+        }
+    }
+    let Some((fname, bytes)) = file else {
+        return (StatusCode::BAD_REQUEST, "no statement file in upload").into_response();
+    };
+    if bytes.is_empty() {
+        return (StatusCode::BAD_REQUEST, "uploaded file is empty").into_response();
+    }
+
+    let outcome = match crate::statement_upload::import_statement(
+        &state.pool,
+        company_id,
+        user.id,
+        account_uuid,
+        &fname,
+        &bytes,
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::error!(error = %e, account = %account_uuid, "statement upload failed");
+            return (StatusCode::UNPROCESSABLE_ENTITY, format!("statement import failed: {e}"))
+                .into_response();
+        }
+    };
+    tracing::info!(account = %account_uuid, file = %fname, parsed = outcome.parsed,
+        imported = outcome.imported, duplicates = outcome.duplicates,
+        unparsed = outcome.unparsed, "statement uploaded and imported");
+
+    let page = format!(
+        "<!doctype html><html><head><meta charset=utf-8><title>Statement imported</title>\
+        <style>body{{font-family:system-ui,sans-serif;max-width:680px;margin:2rem auto;padding:0 1rem;color:#222}}\
+        a{{color:#2563eb}}li{{margin:4px 0}}</style></head><body>\
+        <p><a href=\"/app/accounts\">&larr; Chart of accounts</a></p><h1>Statement imported</h1>\
+        <p>Parsed <strong>{fname}</strong> with AI:</p><ul>\
+        <li><strong>{imported}</strong> new transaction(s) added</li>\
+        <li><strong>{duplicates}</strong> duplicate(s) skipped (already in the ledger)</li>\
+        <li><strong>{unparsed}</strong> line(s) ignored (no usable date/amount)</li></ul>\
+        <p><a href=\"/app/transactions?account_id={acct}\">Review the account's transactions &rarr;</a></p>\
+        </body></html>",
+        fname = esc_html(&fname),
+        imported = outcome.imported,
+        duplicates = outcome.duplicates,
+        unparsed = outcome.unparsed,
+        acct = account_uuid,
     );
     Html(page).into_response()
 }

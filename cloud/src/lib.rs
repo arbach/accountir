@@ -8,6 +8,7 @@ pub mod error;
 pub mod http;
 pub mod plaid;
 pub mod queries;
+pub mod statement_upload;
 pub mod store;
 pub mod tenant;
 pub mod web;
