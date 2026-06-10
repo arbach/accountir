@@ -71,6 +71,7 @@
     input.disabled = true; sendBtn.disabled = true; sendBtn.textContent = 'Thinking…';
     bubble('user', text);
     var live = bubble('assistant', '');
+    var pendingNav = null;
 
     function handle(ev) {
       if (ev.type === 'stream_event' && ev.event) {
@@ -87,6 +88,7 @@
             live.textContent = blk.text;
             live = bubble('assistant', '');
           } else if (blk.type === 'tool_use') {
+            if ((blk.name || '').indexOf('navigate_to_page') >= 0 && blk.input && blk.input.page) { pendingNav = blk.input.page; }
             bubble('assistant · tool (' + (blk.name || '?') + ')', JSON.stringify(blk.input || {}));
             live = bubble('assistant', '');
           }
@@ -119,8 +121,8 @@
           try { handle(JSON.parse(data)); } catch (_) {}
         }
       }
-      // Reload to render the canonical stored conversation.
-      window.location.reload();
+      // Navigate if the agent drove the UI; otherwise reload for canonical history.
+      if (pendingNav) { window.location = pendingNav; } else { window.location.reload(); }
     } catch (err) {
       live.textContent = '(connection error: ' + err.message + ' — falling back)';
       // Graceful fallback to the blocking form post.

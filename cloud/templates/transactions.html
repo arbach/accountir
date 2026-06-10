@@ -7,6 +7,18 @@
 
 <form method="get" action="/app/transactions" class="card" style="margin-bottom: var(--gap);">
   <div class="form-row" style="grid-template-columns: 1fr 1fr 2fr 1fr 2fr auto;">
+    <label class="field"><span class="label-text">Preset</span><select onchange="datePreset(this)" title="Date presets">
+        <option value="">Preset…</option>
+        <option value="this_month">This month</option>
+        <option value="last_month">Last month</option>
+        <option value="this_quarter">This quarter</option>
+        <option value="last_quarter">Last quarter</option>
+        <option value="ytd">Year to date</option>
+        <option value="this_year">This year</option>
+        <option value="last_year">Last year</option>
+        <option value="last_12m">Last 12 months</option>
+        <option value="all">All time</option>
+      </select></label>
     <label class="field"><span class="label-text">From</span><input type="date" name="start" value="{{ start_str }}"></label>
     <label class="field"><span class="label-text">To</span><input type="date" name="end" value="{{ end_str }}"></label>
     <label class="field"><span class="label-text">Account</span>

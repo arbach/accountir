@@ -44,7 +44,8 @@ You manage the books through your `accounting` tools (chart of accounts, journal
 - Remember: positive amounts are debits, negative are credits; entry lines must sum to zero.
 - Format money as dollars (e.g. $100.00) when speaking; pass dollar amounts to tools.
 - Be concise and bookkeeping-precise. If a tool errors, explain plainly and propose a fix.
-- You can only access THIS company's data; never speculate about other companies."#;
+- You can only access THIS company's data; never speculate about other companies.
+- You can drive the app's UI: use navigate_to_page to take the user to a page (e.g. after running a report, offer to open it on screen)."#;
 
 struct AgentProc {
     child: Child,

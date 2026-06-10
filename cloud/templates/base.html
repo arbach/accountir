@@ -373,6 +373,36 @@
     {% block body %}{% endblock %}
   </main>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script>
+  // Shared date-filter presets: fills the form's start/end or as_of and submits.
+  function datePreset(sel) {
+    var v = sel.value; if (!v) return;
+    var f = sel.form;
+    function iso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+    var now = new Date(), y = now.getFullYear(), m = now.getMonth(), q = Math.floor(m/3);
+    var start=null, end=null, asof=null;
+    switch (v) {
+      case 'this_month':  start=new Date(y,m,1); end=now; break;
+      case 'last_month':  start=new Date(y,m-1,1); end=new Date(y,m,0); break;
+      case 'this_quarter':start=new Date(y,q*3,1); end=now; break;
+      case 'last_quarter':start=new Date(y,q*3-3,1); end=new Date(y,q*3,0); break;
+      case 'ytd':         start=new Date(y,0,1); end=now; break;
+      case 'this_year':   start=new Date(y,0,1); end=new Date(y,11,31); break;
+      case 'last_year':   start=new Date(y-1,0,1); end=new Date(y-1,11,31); break;
+      case 'last_12m':    start=new Date(y-1,m,now.getDate()); end=now; break;
+      case 'all':         start=new Date(2000,0,1); end=now; break;
+      case 'asof_today':  asof=now; break;
+      case 'asof_eolm':   asof=new Date(y,m,0); break;
+      case 'asof_eolq':   asof=new Date(y,q*3,0); break;
+      case 'asof_eoly':   asof=new Date(y-1,11,31); break;
+    }
+    var si=f.querySelector('input[name=start]'), ei=f.querySelector('input[name=end]'), ai=f.querySelector('input[name=as_of]');
+    if (start && si) si.value=iso(start);
+    if (end && ei)   ei.value=iso(end);
+    if (asof && ai)  ai.value=iso(asof);
+    f.submit();
+  }
+  </script>
   {% if user_email.is_some() %}
   <!-- Floating AI chat widget (bottom-right, all app pages) -->
   <style>
@@ -434,6 +464,7 @@
       input.value = ''; input.disabled = true; send.disabled = true; send.textContent = '\u2026';
       line('user', text);
       var live = line('assistant', '');
+      var pendingNav = null;
       function handle(ev) {
         if (ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
             && ev.event.delta && ev.event.delta.type === 'text_delta') {
@@ -441,7 +472,10 @@
         } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
           ev.message.content.forEach(function (blk) {
             if (blk.type === 'text' && blk.text) { live.textContent = blk.text; live = line('assistant', ''); }
-            else if (blk.type === 'tool_use') { line('assistant \u00b7 tool (' + (blk.name || '?') + ')', ''); live = line('assistant', ''); }
+            else if (blk.type === 'tool_use') {
+              if ((blk.name || '').indexOf('navigate_to_page') >= 0 && blk.input && blk.input.page) { pendingNav = blk.input.page; }
+              line('assistant \u00b7 tool (' + (blk.name || '?') + ')', ''); live = line('assistant', '');
+            }
           });
         } else if (ev.type === 'daemon_error') { live.textContent = '(agent error: ' + (ev.error || '?') + ')'; }
       }
@@ -464,6 +498,7 @@
         if (!live.textContent) { live.previousSibling && msgs.removeChild(live.previousSibling); msgs.removeChild(live); }
       } catch (err) { live.textContent = '(error: ' + err.message + ')'; }
       input.disabled = false; send.disabled = false; send.textContent = 'Send'; input.focus();
+      if (pendingNav) { setTimeout(function () { window.location = pendingNav; }, 400); }
     });
   })();
   </script>

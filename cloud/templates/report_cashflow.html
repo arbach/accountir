@@ -12,6 +12,18 @@
   </div>
   <div style="display: flex; gap: 8px; align-items: end;">
     <form method="get" action="/app/reports/cash-flow" class="actions">
+      <select onchange="datePreset(this)" title="Date presets">
+        <option value="">Preset…</option>
+        <option value="this_month">This month</option>
+        <option value="last_month">Last month</option>
+        <option value="this_quarter">This quarter</option>
+        <option value="last_quarter">Last quarter</option>
+        <option value="ytd">Year to date</option>
+        <option value="this_year">This year</option>
+        <option value="last_year">Last year</option>
+        <option value="last_12m">Last 12 months</option>
+        <option value="all">All time</option>
+      </select>
       <input type="date" name="start" value="{{ report.start }}" style="width: 140px;">
       <input type="date" name="end" value="{{ report.end }}" style="width: 140px;">
       <button type="submit" class="btn btn-secondary">Update</button>

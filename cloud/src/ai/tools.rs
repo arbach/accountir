@@ -146,6 +146,15 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": { "type": "object", "properties": {} }
         }),
         json!({
+            "name": "navigate_to_page",
+            "description": "Navigate the user's browser to a page of this app. Use when the user asks to see/open/go to a page, or to show them the result of your work. Available pages: /app/dashboard, /app/invoices (sales), /app/transactions, /app/entries (journal), /app/accounts (chart of accounts), /app/banks, /app/banks/link, /app/reports, /app/reports/trial-balance, /app/reports/income-statement?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/reports/balance-sheet?as_of=YYYY-MM-DD, /app/reports/cash-flow?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/chat, /app/admin/companies, /app/admin/members, /app/admin/settings.",
+            "input_schema": {
+                "type": "object",
+                "properties": { "page": {"type": "string", "description": "App path starting with /app/, optionally with query params"} },
+                "required": ["page"]
+            }
+        }),
+        json!({
             "name": "sync_bank",
             "description": "Sync transactions from a connected bank item (by item id from list_bank_connections). Imports new bank transactions into the ledger.",
             "input_schema": {
@@ -176,6 +185,7 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "cash_flow" => cash_flow_tool(ctx, input).await,
         "list_transactions" => list_transactions_tool(ctx, input).await,
         "list_bank_connections" => list_bank_connections_tool(ctx).await,
+        "navigate_to_page" => navigate_tool(input),
         // NOTE: "sync_bank" needs AppState (plaid config) and is handled by the
         // MCP route layer before delegating here.
         other => json!({ "error": format!("unknown tool: {other}") }),
@@ -317,6 +327,29 @@ async fn list_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
         }),
         Err(e) => json!({ "error": format!("{e}") }),
     }
+}
+
+/// The browser performs the actual navigation when it sees this tool_use in
+/// the live event stream; server-side we only validate the target so the
+/// agent can never send the user off-app.
+fn navigate_tool(input: &Value) -> Value {
+    let Some(page) = input.get("page").and_then(|v| v.as_str()) else {
+        return json!({ "error": "page required" });
+    };
+    let (path, query) = page.split_once('?').unwrap_or((page, ""));
+    let path_ok = path.starts_with("/app/")
+        && !path.contains("..")
+        && !path.contains("//")
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_'));
+    let query_ok = query
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '=' | '&' | '-' | '_' | '%' | '.'));
+    if !path_ok || !query_ok {
+        return json!({ "error": "invalid page: must be an in-app path starting with /app/" });
+    }
+    json!({ "ok": true, "navigating_to": page, "note": "the user's browser is switching to this page now" })
 }
 
 async fn list_bank_connections_tool(ctx: &ToolContext<'_>) -> Value {

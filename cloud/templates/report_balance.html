@@ -10,6 +10,13 @@
   <div><h1>Balance sheet</h1><div class="subtitle">As of {{ report.as_of }}</div></div>
   <div style="display: flex; gap: 8px; align-items: end;">
     <form method="get" action="/app/reports/balance-sheet" class="actions">
+      <select onchange="datePreset(this)" title="Date presets">
+        <option value="">Preset…</option>
+        <option value="asof_today">Today</option>
+        <option value="asof_eolm">End of last month</option>
+        <option value="asof_eolq">End of last quarter</option>
+        <option value="asof_eoly">End of last year</option>
+      </select>
       <input type="date" name="as_of" value="{{ report.as_of }}" style="width: 140px;">
       <button type="submit" class="btn btn-secondary">Update</button>
     </form>
