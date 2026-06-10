@@ -2399,34 +2399,53 @@ async fn tax_profile_upload(
     };
     let _ = user;
 
-    let mut file: Option<Vec<u8>> = None;
+    let mut docs: Vec<(String, Vec<u8>)> = Vec::new();
     while let Ok(Some(field)) = multipart.next_field().await {
         if field.name() == Some("document") {
+            let fname = field.file_name().unwrap_or("document").to_string();
             match field.bytes().await {
-                Ok(b) => file = Some(b.to_vec()),
+                Ok(b) => {
+                    if !b.is_empty() {
+                        docs.push((fname, b.to_vec()));
+                    }
+                }
                 Err(e) => {
                     return (StatusCode::BAD_REQUEST, format!("upload failed: {e}")).into_response()
                 }
             }
         }
     }
-    let Some(bytes) = file.filter(|b| !b.is_empty()) else {
-        return (StatusCode::BAD_REQUEST, "no document in upload").into_response();
-    };
-    let text = if bytes.starts_with(b"%PDF") {
-        match crate::plaid::statements::extract_text(&bytes) {
-            Ok(t) => t,
-            Err(e) => {
-                return (StatusCode::UNPROCESSABLE_ENTITY, format!("pdf parse failed: {e}"))
-                    .into_response()
+    if docs.is_empty() {
+        return (StatusCode::BAD_REQUEST, "no documents in upload").into_response();
+    }
+    // All documents feed one combined parse: later documents can fill what
+    // earlier ones don't state (EIN letter + articles + prior return).
+    let mut text = String::new();
+    let mut extracted_any = false;
+    for (fname, bytes) in &docs {
+        let extracted = if bytes.starts_with(b"%PDF") {
+            match crate::plaid::statements::extract_text(bytes) {
+                Ok(t) => {
+                    extracted_any = extracted_any || !t.trim().is_empty();
+                    t
+                }
+                Err(e) => format!("(could not read this PDF: {e})"),
             }
-        }
-    } else if bytes.contains(&0) {
-        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "only PDF and text files are supported")
+        } else if bytes.contains(&0) {
+            "(unsupported binary format)".to_string()
+        } else {
+            extracted_any = true;
+            String::from_utf8_lossy(bytes).to_string()
+        };
+        text.push_str(&format!("=== Document: \"{fname}\" ===\n{extracted}\n\n"));
+    }
+    if !extracted_any {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "no text could be extracted from any of the documents",
+        )
             .into_response();
-    } else {
-        String::from_utf8_lossy(&bytes).to_string()
-    };
+    }
 
     let parsed = match crate::tax::parse_entity_document(&text).await {
         Ok(v) => v,

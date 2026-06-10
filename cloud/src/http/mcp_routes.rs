@@ -31,8 +31,8 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> Response {
         .into_response()
 }
 
-/// Resolve the bearer token to (company_id, acting user_id).
-async fn auth_company(state: &AppState, headers: &HeaderMap) -> Option<(Uuid, Uuid)> {
+/// Resolve the bearer token to (company_id, acting user_id, is_personal).
+async fn auth_company(state: &AppState, headers: &HeaderMap) -> Option<(Uuid, Uuid, bool)> {
     let token = headers
         .get("authorization")?
         .to_str()
@@ -49,35 +49,75 @@ async fn auth_company(state: &AppState, headers: &HeaderMap) -> Option<(Uuid, Uu
     .ok()
     .flatten();
     let (company_id, last_user) = row?;
-    let user_id = match last_user {
-        Some(u) => u,
-        None => {
-            // Fall back to the company owner for event attribution.
-            sqlx::query_as::<_, (Uuid,)>("SELECT owner_user_id FROM companies WHERE id = $1")
-                .bind(company_id)
-                .fetch_optional(&state.pool)
-                .await
-                .ok()
-                .flatten()?
-                .0
-        }
-    };
-    Some((company_id, user_id))
+    let (owner, is_personal): (Uuid, bool) =
+        sqlx::query_as("SELECT owner_user_id, is_personal FROM companies WHERE id = $1")
+            .bind(company_id)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()?;
+    let user_id = last_user.unwrap_or(owner);
+    Some((company_id, user_id, is_personal))
+}
+
+/// For personal-entity sessions: resolve an `entity` argument (uuid, name, or
+/// slug) to a company the acting user is a member of. Membership is the gate —
+/// an unknown or unauthorized entity returns None.
+async fn resolve_entity(
+    state: &AppState,
+    user_id: Uuid,
+    entity: &str,
+) -> Option<(Uuid, String)> {
+    let companies = crate::queries::list_companies_for_user(&state.pool, user_id)
+        .await
+        .ok()?;
+    let wanted = entity.trim().to_lowercase();
+    companies
+        .into_iter()
+        .find(|c| {
+            c.id.to_string() == wanted
+                || c.name.to_lowercase() == wanted
+                || c.slug.to_lowercase() == wanted
+        })
+        .map(|c| (c.id, c.name))
 }
 
 /// Tool schemas in MCP shape (`inputSchema`, not Anthropic's `input_schema`).
-fn mcp_tool_list() -> Vec<Value> {
-    tools::schemas()
+/// Personal-entity sessions additionally get a `list_entities` tool, and every
+/// tool gains an optional `entity` parameter for cross-entity operation.
+fn mcp_tool_list(is_personal: bool) -> Vec<Value> {
+    let mut out: Vec<Value> = tools::schemas()
         .into_iter()
         .map(|mut t| {
             if let Some(obj) = t.as_object_mut() {
-                if let Some(schema) = obj.remove("input_schema") {
+                if let Some(mut schema) = obj.remove("input_schema") {
+                    if is_personal {
+                        if let Some(props) =
+                            schema.get_mut("properties").and_then(|p| p.as_object_mut())
+                        {
+                            props.insert(
+                                "entity".to_string(),
+                                json!({
+                                    "type": "string",
+                                    "description": "Optional: operate on another of the user's entities (name, slug, or id from list_entities). Defaults to this personal entity."
+                                }),
+                            );
+                        }
+                    }
                     obj.insert("inputSchema".to_string(), schema);
                 }
             }
             t
         })
-        .collect()
+        .collect();
+    if is_personal {
+        out.push(json!({
+            "name": "list_entities",
+            "description": "List every entity (company) this user can manage, including this personal one. Use the returned name as the `entity` parameter on any other tool to operate on that entity.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }));
+    }
+    out
 }
 
 async fn mcp_post(
@@ -85,7 +125,7 @@ async fn mcp_post(
     headers: HeaderMap,
     Json(rpc): Json<Value>,
 ) -> Response {
-    let Some((company_id, user_id)) = auth_company(&state, &headers).await else {
+    let Some((company_id, user_id, is_personal)) = auth_company(&state, &headers).await else {
         return (StatusCode::UNAUTHORIZED, "invalid bearer token").into_response();
     };
 
@@ -111,15 +151,68 @@ async fn mcp_post(
         // Notifications carry no id and expect no JSON-RPC response.
         m if m.starts_with("notifications/") => StatusCode::ACCEPTED.into_response(),
         "ping" => rpc_result(&id, json!({})),
-        "tools/list" => rpc_result(&id, json!({ "tools": mcp_tool_list() })),
+        "tools/list" => rpc_result(&id, json!({ "tools": mcp_tool_list(is_personal) })),
         "tools/call" => {
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let args = params.get("arguments").cloned().unwrap_or(json!({}));
+            let mut args = params.get("arguments").cloned().unwrap_or(json!({}));
+
+            // Personal-entity sessions may re-scope a call to another entity
+            // the user is a member of via the optional `entity` argument.
+            let mut company_id = company_id;
+            let entity_arg = args
+                .as_object_mut()
+                .and_then(|o| o.remove("entity"))
+                .and_then(|v| v.as_str().map(str::to_string))
+                .filter(|s| !s.trim().is_empty());
+            if let Some(entity) = entity_arg {
+                if !is_personal {
+                    return rpc_result(
+                        &id,
+                        json!({
+                            "content": [{ "type": "text", "text": json!({
+                                "error": "cross-entity access is only available from the personal entity's session"
+                            }).to_string() }],
+                            "isError": true
+                        }),
+                    );
+                }
+                match resolve_entity(&state, user_id, &entity).await {
+                    Some((target_id, target_name)) => {
+                        tracing::info!(from = %company_id, to = %target_id, entity = %target_name,
+                            "personal session cross-entity call");
+                        company_id = target_id;
+                    }
+                    None => {
+                        return rpc_result(
+                            &id,
+                            json!({
+                                "content": [{ "type": "text", "text": json!({
+                                    "error": format!("unknown entity '{entity}' or no access — use list_entities")
+                                }).to_string() }],
+                                "isError": true
+                            }),
+                        );
+                    }
+                }
+            }
             tracing::info!(company = %company_id, tool = name, "agent tool call");
 
             // sync_bank needs full AppState (Plaid config), so it can't live in
             // ai::tools::execute which only sees the pool.
-            let out: Value = if name == "sync_bank" {
+            let out: Value = if name == "list_entities" {
+                if !is_personal {
+                    json!({ "error": "list_entities is only available from the personal entity's session" })
+                } else {
+                    match crate::queries::list_companies_for_user(&state.pool, user_id).await {
+                        Ok(companies) => json!({
+                            "entities": companies.iter().map(|c| json!({
+                                "id": c.id, "name": c.name, "slug": c.slug, "role": c.role,
+                            })).collect::<Vec<_>>()
+                        }),
+                        Err(e) => json!({ "error": format!("{e}") }),
+                    }
+                }
+            } else if name == "sync_bank" {
                 match args
                     .get("item_id")
                     .and_then(|v| v.as_str())

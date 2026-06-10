@@ -115,7 +115,16 @@ pub fn format_cents(cents: i64) -> String {
     let abs = cents.unsigned_abs();
     let dollars = abs / 100;
     let frac = abs % 100;
-    format!("{sign}{dollars}.{frac:02}")
+    // Thousands separators: 1303039 -> "13,030.39"
+    let digits = dollars.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    format!("{sign}{grouped}.{frac:02}")
 }
 
 pub async fn trial_balance(

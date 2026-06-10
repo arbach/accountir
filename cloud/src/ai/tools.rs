@@ -159,7 +159,7 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "entity_type": {"type": "string", "enum": ["schedule_c", "s_corp", "partnership", "c_corp"]},
+                    "entity_type": {"type": "string", "enum": ["individual", "schedule_c", "s_corp", "partnership", "c_corp"]},
                     "legal_name": {"type": "string"},
                     "ein": {"type": "string"},
                     "address": {"type": "object", "properties": {

@@ -28,14 +28,15 @@
   <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
     <span>Step 1 · Tax profile</span>
     <form method="post" action="/app/tax/profile/upload" enctype="multipart/form-data" style="display:inline;">
-      <input type="file" name="document" accept=".pdf,.txt" style="display:none;" onchange="if (this.files.length) { this.form.querySelector('button').textContent = 'Parsing…'; this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit(); }">
-      <button type="button" class="btn btn-secondary" style="font-size:12px; padding:4px 12px;" title="Upload an entity document (IRS EIN letter CP-575, articles of organization, prior tax return) — it's AI-parsed and this form is filled in automatically" onclick="this.form.querySelector('input[type=file]').click()">&#128206; Upload entity document (auto-fill)</button>
+      <input type="file" name="document" accept=".pdf,.txt" multiple style="display:none;" onchange="if (this.files.length) { this.form.querySelector('button').textContent = 'Parsing…'; this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit(); }">
+      <button type="button" class="btn btn-secondary" style="font-size:12px; padding:4px 12px;" title="Upload entity documents (IRS EIN letter CP-575, articles of organization, prior tax return) — they're AI-parsed together and this form is filled in automatically" onclick="this.form.querySelector('input[type=file]').click()">&#128206; Upload entity documents (auto-fill)</button>
     </form>
   </div>
   <form method="post" action="/app/tax/profile">
     <div class="form-row" style="grid-template-columns: 1fr 2fr 1fr; align-items: end;">
       <label class="field"><span class="label-text">Entity type</span>
         <select name="entity_type">
+          <option value="individual" {% if profile_entity == "individual" %}selected{% endif %}>Individual / personal (Form 1040)</option>
           <option value="schedule_c" {% if profile_entity == "schedule_c" %}selected{% endif %}>Sole prop / single-member LLC (Schedule C)</option>
           <option value="s_corp" {% if profile_entity == "s_corp" %}selected{% endif %}>S corporation (1120-S)</option>
           <option value="partnership" {% if profile_entity == "partnership" %}selected{% endif %}>Partnership (1065)</option>
