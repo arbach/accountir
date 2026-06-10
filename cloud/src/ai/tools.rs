@@ -149,6 +149,22 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": { "type": "object", "properties": {} }
         }),
         json!({
+            "name": "create_report",
+            "description": "Generate a saved report document that appears under Reports → Tax Documents and can be saved as PDF. Use type 'tax_package' to complete the full year-end tax documents (income statement + balance sheet + cash flow + trial balance for a year). Returns the document URL — navigate the user there afterwards.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["income_statement", "balance_sheet", "cash_flow", "trial_balance", "tax_package"]},
+                    "year": {"type": "integer", "description": "Fiscal year (defaults to current). Used for tax_package and as the default range."},
+                    "start": {"type": "string", "description": "YYYY-MM-DD (optional, overrides year)"},
+                    "end": {"type": "string", "description": "YYYY-MM-DD (optional, overrides year)"},
+                    "as_of": {"type": "string", "description": "YYYY-MM-DD for balance_sheet (optional)"},
+                    "title": {"type": "string", "description": "Optional custom title"}
+                },
+                "required": ["type"]
+            }
+        }),
+        json!({
             "name": "void_entry",
             "description": "Void a journal entry (reversible). Use this to undo a posted entry instead of posting a manual reversal. Get the entry_id from list_recent_entries or list_transactions.",
             "input_schema": {
@@ -174,7 +190,7 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "navigate_to_page",
-            "description": "Navigate the user's browser to a page of this app. Use when the user asks to see/open/go to a page, or to show them the result of your work. Available pages: /app/dashboard, /app/invoices (sales), /app/transactions, /app/entries (journal), /app/accounts (chart of accounts), /app/banks, /app/banks/link, /app/reports, /app/reports/trial-balance, /app/reports/income-statement?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/reports/balance-sheet?as_of=YYYY-MM-DD, /app/reports/cash-flow?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/chat, /app/admin/companies, /app/admin/members, /app/admin/settings.",
+            "description": "Navigate the user's browser to a page of this app. Use when the user asks to see/open/go to a page, or to show them the result of your work. Available pages: /app/dashboard, /app/invoices (sales), /app/transactions, /app/entries (journal), /app/accounts (chart of accounts), /app/banks, /app/banks/link, /app/reports, /app/reports/trial-balance, /app/reports/income-statement?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/reports/balance-sheet?as_of=YYYY-MM-DD, /app/reports/cash-flow?start=YYYY-MM-DD&end=YYYY-MM-DD, /app/reports/tax-documents, /app/reports/documents/<id>, /app/chat, /app/admin/companies, /app/admin/members, /app/admin/settings.",
             "input_schema": {
                 "type": "object",
                 "properties": { "page": {"type": "string", "description": "App path starting with /app/, optionally with query params"} },
@@ -206,6 +222,7 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "get_account_balance" => get_account_balance_tool(ctx, input).await,
         "create_account" => create_account_tool(ctx, input).await,
         "post_journal_entry" => post_entry_tool(ctx, input).await,
+        "create_report" => create_report_tool(ctx, input).await,
         "void_entry" => void_entry_tool(ctx, input, false).await,
         "unvoid_entry" => void_entry_tool(ctx, input, true).await,
         "trial_balance" => trial_balance_tool(ctx).await,
@@ -525,6 +542,48 @@ async fn create_account_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
     .await
     {
         Ok(id) => json!({ "ok": true, "account_id": id, "account_number": acct_num, "name": name }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn create_report_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let doc_type = input.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let date_of = |k: &str| {
+        input
+            .get(k)
+            .and_then(|v| v.as_str())
+            .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+    };
+    let year = input.get("year").and_then(|v| v.as_i64()).map(|y| y as i32);
+    match crate::docgen::generate(
+        ctx.pool,
+        ctx.company_id,
+        doc_type,
+        date_of("start"),
+        date_of("end"),
+        date_of("as_of"),
+        year,
+    )
+    .await
+    {
+        Ok((default_title, kind, html)) => {
+            let title = input
+                .get("title")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(&default_title);
+            match crate::docgen::save_document(ctx.pool, ctx.company_id, &kind, title, &html).await
+            {
+                Ok(id) => json!({
+                    "ok": true,
+                    "document_id": id,
+                    "title": title,
+                    "url": format!("/app/reports/documents/{id}"),
+                    "tab": "/app/reports/tax-documents"
+                }),
+                Err(e) => json!({ "error": format!("save failed: {e}") }),
+            }
+        }
         Err(e) => json!({ "error": format!("{e}") }),
     }
 }

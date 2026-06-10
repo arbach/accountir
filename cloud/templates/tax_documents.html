@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Tax Documents · Maven{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div><h1>Tax Documents</h1><div class="subtitle">Generated reports and year-end tax packages — save any of them as PDF</div></div>
+  <div class="actions">
+    <a href="/app/reports/tax-documents/print-all" class="btn btn-secondary" target="_blank">Make all documents PDFs</a>
+  </div>
+</div>
+
+<form method="post" action="/app/reports/tax-documents/generate" class="card" style="margin-bottom: var(--gap);">
+  <div class="form-row" style="grid-template-columns: 2fr 1fr auto; align-items: end;">
+    <label class="field"><span class="label-text">Document</span>
+      <select name="doc_type">
+        <option value="tax_package">Year-end tax package (P&amp;L + balance sheet + cash flow + trial balance)</option>
+        <option value="income_statement">Income statement (full year)</option>
+        <option value="balance_sheet">Balance sheet (year end)</option>
+        <option value="cash_flow">Cash flow (full year)</option>
+        <option value="trial_balance">Trial balance</option>
+      </select>
+    </label>
+    <label class="field"><span class="label-text">Year</span>
+      <input type="number" name="year" value="{{ current_year }}" min="2000" max="2100" style="width: 110px;">
+    </label>
+    <div style="padding-bottom: 12px;"><button type="submit" class="btn btn-primary">Generate</button></div>
+  </div>
+  <div class="muted" style="font-size: 12px;">Tip: the AI assistant can prepare these for you — ask it to "complete the tax documents for 2025".</div>
+</form>
+
+{% if docs.is_empty() %}
+<div class="empty">
+  <h3>No documents yet</h3>
+  <p>Generate one above, or ask the AI assistant to prepare your tax documents.</p>
+</div>
+{% else %}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Title</th><th style="width:90px">Type</th><th style="width:170px">Created</th><th style="width:170px"></th></tr></thead>
+  <tbody>
+  {% for d in docs %}
+    <tr>
+      <td><a href="/app/reports/documents/{{ d.id }}">{{ d.title }}</a></td>
+      <td><span class="badge">{{ d.kind }}</span></td>
+      <td class="muted">{{ d.created_display() }}</td>
+      <td>
+        <a href="/app/reports/documents/{{ d.id }}" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" target="_blank">View / PDF</a>
+        <form method="post" action="/app/reports/documents/{{ d.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this document?')">
+          <button class="btn btn-danger" style="padding:2px 10px; font-size:12px;">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

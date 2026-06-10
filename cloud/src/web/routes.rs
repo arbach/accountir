@@ -70,6 +70,11 @@ pub fn router() -> Router<AppState> {
         )
         .route("/app/chat/clear", post(chat_clear_route))
         .route("/app/dashboard", get(dashboard))
+        .route("/app/reports/tax-documents", get(tax_documents))
+        .route("/app/reports/tax-documents/generate", post(tax_documents_generate))
+        .route("/app/reports/tax-documents/print-all", get(tax_documents_print_all))
+        .route("/app/reports/documents/{id}", get(document_view))
+        .route("/app/reports/documents/{id}/delete", post(document_delete))
         .route("/app/transactions", get(transactions_list))
         .route("/app/transactions/bulk-reclassify", post(transactions_bulk_reclassify))
         .route("/app/transactions/{line_id}/reclassify", post(transaction_reclassify))
@@ -2233,6 +2238,157 @@ async fn entry_unvoid(
     };
     let _ = unvoid_entry(&state.pool, company_id, user.id, entry_uuid, "unvoided via UI".into()).await;
     Redirect::to("/app/transactions").into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Generated documents (Reports → Tax Documents)
+// ---------------------------------------------------------------------------
+
+#[derive(Template)]
+#[template(path = "tax_documents.html")]
+struct TaxDocsTpl {
+    user_email: Option<String>,
+    flash: Option<String>,
+    flash_kind: Option<String>,
+    nav: NavCtx,
+    docs: Vec<crate::docgen::DocRow>,
+    current_year: i32,
+}
+
+async fn tax_documents(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let docs = crate::docgen::list_documents(&state.pool, company_id)
+        .await
+        .unwrap_or_default();
+    let current_year = chrono::Utc::now().format("%Y").to_string().parse().unwrap_or(2026);
+    render(TaxDocsTpl {
+        user_email: Some(user.email),
+        flash: None,
+        flash_kind: None,
+        nav: build_nav(&state, &jar, user.id).await,
+        docs,
+        current_year,
+    })
+}
+
+#[derive(Deserialize)]
+struct GenerateDocForm {
+    doc_type: String,
+    year: Option<i32>,
+}
+
+async fn tax_documents_generate(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Form(req): Form<GenerateDocForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    match crate::docgen::generate(&state.pool, company_id, &req.doc_type, None, None, None, req.year)
+        .await
+    {
+        Ok((title, kind, html)) => {
+            match crate::docgen::save_document(&state.pool, company_id, &kind, &title, &html).await
+            {
+                Ok(id) => Redirect::to(&format!("/app/reports/documents/{id}")).into_response(),
+                Err(e) => {
+                    tracing::error!(error = ?e, "save document failed");
+                    (StatusCode::INTERNAL_SERVER_ERROR, "could not save document").into_response()
+                }
+            }
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, format!("could not generate: {e}")).into_response(),
+    }
+}
+
+async fn document_view(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let _ = user;
+    let doc_id = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad document id").into_response(),
+    };
+    match crate::docgen::get_document(&state.pool, company_id, doc_id).await {
+        Ok(Some((title, html))) => Html(crate::docgen::doc_shell(&title, &html, false)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "document not found").into_response(),
+        Err(e) => {
+            tracing::error!(error = ?e, "load document failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "could not load document").into_response()
+        }
+    }
+}
+
+/// One print view containing every saved document — "make all documents PDFs"
+/// is one Ctrl+P / Save as PDF away.
+async fn tax_documents_print_all(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let _ = user;
+    let docs = crate::docgen::list_documents(&state.pool, company_id)
+        .await
+        .unwrap_or_default();
+    let mut body = String::new();
+    for d in &docs {
+        if let Ok(Some((_, html))) = crate::docgen::get_document(&state.pool, company_id, d.id).await
+        {
+            body.push_str(&html);
+            body.push_str("<div class=\"page-break\"></div>");
+        }
+    }
+    if body.is_empty() {
+        body = "<p>No documents yet — generate one from the Tax Documents page.</p>".to_string();
+    }
+    Html(crate::docgen::doc_shell("All documents", &body, false)).into_response()
+}
+
+async fn document_delete(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let _ = user;
+    if let Ok(doc_id) = Uuid::parse_str(&id) {
+        let _ = crate::docgen::delete_document(&state.pool, company_id, doc_id).await;
+    }
+    Redirect::to("/app/reports/tax-documents").into_response()
 }
 
 // ---------------------------------------------------------------------------
