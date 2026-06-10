@@ -22,10 +22,13 @@ use std::{
 };
 
 use axum::{
+    body::{Body, Bytes},
     extract::State,
+    response::Response,
     routing::{get, post},
     Json, Router,
 };
+use tokio_stream::wrappers::ReceiverStream;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -126,6 +129,7 @@ async fn spawn_proc(
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
+        .arg("--include-partial-messages")
         .arg("--strict-mcp-config")
         .arg("--mcp-config")
         .arg(&mcp_path)
@@ -174,14 +178,16 @@ fn user_turn_line(message: &str) -> anyhow::Result<String> {
     }))? + "\n")
 }
 
-/// Run one turn against the (possibly fresh) agent process. Returns all
-/// stream-json events through the terminating `result` event.
+/// Run one turn against the (possibly fresh) agent process, forwarding every
+/// stream-json event line into `tx` AS IT ARRIVES, through the terminating
+/// `result` event.
 async fn run_turn(
     d: &Daemon,
     slot: &mut Option<AgentProc>,
     company_id: Uuid,
     message: &str,
-) -> anyhow::Result<Vec<Value>> {
+    tx: &tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>,
+) -> anyhow::Result<()> {
     let line = user_turn_line(message)?;
 
     if slot.is_none() {
@@ -206,7 +212,7 @@ async fn run_turn(
     }
 
     let proc = slot.as_mut().unwrap();
-    let mut events: Vec<Value> = Vec::new();
+    let mut forwarded = 0usize;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(d.cfg.turn_timeout_secs);
     loop {
         match tokio::time::timeout_at(deadline, proc.stdout.next_line()).await {
@@ -214,7 +220,10 @@ async fn run_turn(
             Ok(Ok(Some(l))) => {
                 let Ok(v) = serde_json::from_str::<Value>(&l) else { continue };
                 let done = v.get("type").and_then(|t| t.as_str()) == Some("result");
-                events.push(v);
+                forwarded += 1;
+                // Forward the raw line immediately; receiver gone = client hung up,
+                // but we still drain to the result so the session stays consistent.
+                let _ = tx.send(Ok(Bytes::from(l + "\n"))).await;
                 if done {
                     break;
                 }
@@ -223,18 +232,18 @@ async fn run_turn(
                 // Stream closed mid-turn. If we got nothing at all, the stored
                 // session likely failed to resume — drop it so the next turn
                 // starts a fresh session instead of failing forever.
-                if events.is_empty() {
+                if forwarded == 0 {
                     let _ = sqlx::query("DELETE FROM agent_sessions WHERE company_id = $1")
                         .bind(company_id)
                         .execute(&d.pool)
                         .await;
                 }
-                anyhow::bail!("agent process closed stream mid-turn ({} events)", events.len());
+                anyhow::bail!("agent process closed stream mid-turn ({forwarded} events)");
             }
         }
     }
     proc.last_used = Instant::now();
-    Ok(events)
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -244,36 +253,51 @@ struct TurnReq {
     message: String,
 }
 
-async fn turn(State(d): State<Arc<Daemon>>, Json(req): Json<TurnReq>) -> Json<Value> {
-    let slot = {
-        let mut m = d.agents.lock().await;
-        m.entry(req.company_id)
-            .or_insert_with(|| Arc::new(Mutex::new(None)))
-            .clone()
-    };
-    // Per-company mutex serializes turns; other companies proceed in parallel.
-    let mut guard = slot.lock().await;
+async fn turn(State(d): State<Arc<Daemon>>, Json(req): Json<TurnReq>) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(64);
+    tokio::spawn(async move {
+        let slot = {
+            let mut m = d.agents.lock().await;
+            m.entry(req.company_id)
+                .or_insert_with(|| Arc::new(Mutex::new(None)))
+                .clone()
+        };
+        // Per-company mutex serializes turns; other companies proceed in parallel.
+        let mut guard = slot.lock().await;
 
-    // Attribute MCP tool calls to the requesting user (row exists after ensure).
-    let result = run_turn(&d, &mut guard, req.company_id, &req.message).await;
-    if let Some(uid) = req.user_id {
-        let _ = sqlx::query(
-            "UPDATE agent_sessions SET last_user_id = $2, updated_at = now() WHERE company_id = $1",
-        )
-        .bind(req.company_id)
-        .bind(uid)
-        .execute(&d.pool)
-        .await;
-    }
+        // Attribute MCP tool calls to the requesting user.
+        if let Some(uid) = req.user_id {
+            // Row may not exist yet on the very first turn; run_turn ensures it,
+            // so set attribution both before (best-effort) and rely on it below.
+            let _ = sqlx::query(
+                "UPDATE agent_sessions SET last_user_id = $2, updated_at = now() WHERE company_id = $1",
+            )
+            .bind(req.company_id)
+            .bind(uid)
+            .execute(&d.pool)
+            .await;
+        }
 
-    match result {
-        Ok(events) => Json(json!({ "ok": true, "events": events })),
-        Err(e) => {
+        if let Err(e) = run_turn(&d, &mut guard, req.company_id, &req.message, &tx).await {
             *guard = None; // kill_on_drop reaps a wedged child
             tracing::error!(company = %req.company_id, error = %e, "turn failed");
-            Json(json!({ "ok": false, "error": e.to_string() }))
+            let line = json!({ "type": "daemon_error", "error": e.to_string() }).to_string() + "\n";
+            let _ = tx.send(Ok(Bytes::from(line))).await;
         }
-    }
+        if let Some(uid) = req.user_id {
+            let _ = sqlx::query(
+                "UPDATE agent_sessions SET last_user_id = $2, updated_at = now() WHERE company_id = $1",
+            )
+            .bind(req.company_id)
+            .bind(uid)
+            .execute(&d.pool)
+            .await;
+        }
+    });
+    Response::builder()
+        .header("content-type", "application/x-ndjson")
+        .body(Body::from_stream(ReceiverStream::new(rx)))
+        .unwrap()
 }
 
 #[derive(Deserialize)]

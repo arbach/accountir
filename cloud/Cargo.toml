@@ -24,6 +24,7 @@ accountir-core = { path = "../core" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
 
 # HTTP server
 axum = { version = "0.8", features = ["macros"] }

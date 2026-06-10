@@ -8,7 +8,6 @@ pub struct Config {
     pub session_ttl_days: i64,
     pub cookie_secure: bool,
     pub plaid: PlaidConfig,
-    pub anthropic_api_key: Option<String>,
     pub public_base_url: String,
 }
 
@@ -74,7 +73,6 @@ impl Config {
         session_cookie_key.copy_from_slice(&key_bytes);
 
         let plaid = PlaidConfig::from_env()?;
-        let anthropic_api_key = env::var("ANTHROPIC_API_KEY").ok().filter(|s| !s.is_empty());
         let public_base_url = env::var("PUBLIC_BASE_URL")
             .ok()
             .filter(|s| !s.is_empty())
@@ -87,7 +85,6 @@ impl Config {
             session_ttl_days,
             cookie_secure,
             plaid,
-            anthropic_api_key,
             public_base_url,
         })
     }

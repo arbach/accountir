@@ -3,21 +3,14 @@
 {% block body %}
 <div class="page-header">
   <div><h1>AI assistant</h1>
-    <div class="subtitle">Ask Claude to read your books, classify, or post entries. Tool calls run against your data.</div>
+    <div class="subtitle">Your company's dedicated AI accountant — persistent memory, live tool access to your books.</div>
   </div>
   <div class="actions">
-    <form method="post" action="/app/chat/clear" onsubmit="return confirm('Clear conversation history?')" style="margin:0;">
+    <form method="post" action="/app/chat/clear" onsubmit="return confirm('Clear conversation history? The AI will forget this conversation.')" style="margin:0;">
       <button class="btn btn-ghost" type="submit">Clear chat</button>
     </form>
   </div>
 </div>
-
-{% if !api_key_set %}
-<div class="flash err">
-  <strong>Chat unavailable.</strong> Set <code>ANTHROPIC_API_KEY</code> in <code>cloud/.env</code> and restart the server.
-  Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
-</div>
-{% endif %}
 
 <div class="card" style="padding: 0;">
   <div id="messages" style="padding: 14px 18px; max-height: 56vh; overflow-y: auto;">
@@ -35,15 +28,107 @@
       <ul style="margin: 8px 0 0 16px; padding: 0;">
         <li>"Show me my chart of accounts"</li>
         <li>"What's the balance on account 1000?"</li>
-        <li>"Create a new expense account 5100 called Software"</li>
-        <li>"Post a $50 entry: debit 5100 Software, credit 1000 Cash, today, memo 'GitHub Copilot'"</li>
+        <li>"Run an income statement for this year"</li>
+        <li>"Sync my bank and summarize anything new"</li>
       </ul>
     </div>
     {% endif %}
   </div>
-  <form method="post" action="/app/chat/messages" style="border-top: 1px solid var(--border); padding: 12px 14px; display: flex; gap: 8px;">
-    <input type="text" name="message" placeholder="Ask anything…" required autofocus style="flex: 1;" {% if !api_key_set %}disabled{% endif %}>
-    <button type="submit" class="btn btn-primary" {% if !api_key_set %}disabled{% endif %}>Send</button>
+  <form id="chat-form" method="post" action="/app/chat/messages" style="border-top: 1px solid var(--border); padding: 12px 14px; display: flex; gap: 8px;">
+    <input id="chat-input" type="text" name="message" placeholder="Ask anything…" required autofocus autocomplete="off" style="flex: 1;">
+    <button id="chat-send" type="submit" class="btn btn-primary">Send</button>
   </form>
 </div>
+
+<script>
+(function () {
+  var form = document.getElementById('chat-form');
+  var input = document.getElementById('chat-input');
+  var sendBtn = document.getElementById('chat-send');
+  var box = document.getElementById('messages');
+
+  function bubble(role, body) {
+    var wrap = document.createElement('div');
+    wrap.style.marginBottom = '14px';
+    var r = document.createElement('div');
+    r.className = 'muted';
+    r.style.cssText = 'font-size:11px;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;';
+    r.textContent = role;
+    var b = document.createElement('div');
+    b.style.cssText = 'white-space:pre-wrap;font-size:14px;';
+    b.textContent = body || '';
+    wrap.appendChild(r); wrap.appendChild(b);
+    box.appendChild(wrap);
+    box.scrollTop = box.scrollHeight;
+    return b;
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    var text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    input.disabled = true; sendBtn.disabled = true; sendBtn.textContent = 'Thinking…';
+    bubble('user', text);
+    var live = bubble('assistant', '');
+
+    function handle(ev) {
+      if (ev.type === 'stream_event' && ev.event) {
+        var d = ev.event;
+        if (d.type === 'content_block_delta' && d.delta && d.delta.type === 'text_delta') {
+          live.textContent += d.delta.text;
+          box.scrollTop = box.scrollHeight;
+        }
+      } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
+        for (var i = 0; i < ev.message.content.length; i++) {
+          var blk = ev.message.content[i];
+          if (blk.type === 'text' && blk.text) {
+            // Canonical full text for this step: replace deltas, open a fresh bubble.
+            live.textContent = blk.text;
+            live = bubble('assistant', '');
+          } else if (blk.type === 'tool_use') {
+            bubble('assistant · tool (' + (blk.name || '?') + ')', JSON.stringify(blk.input || {}));
+            live = bubble('assistant', '');
+          }
+        }
+      } else if (ev.type === 'daemon_error') {
+        live.textContent = '(agent error: ' + (ev.error || 'unknown') + ')';
+      }
+    }
+
+    try {
+      var resp = await fetch('/app/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'message=' + encodeURIComponent(text),
+      });
+      if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+      var reader = resp.body.getReader();
+      var dec = new TextDecoder();
+      var buf = '';
+      while (true) {
+        var r = await reader.read();
+        if (r.done) break;
+        buf += dec.decode(r.value, { stream: true });
+        var idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          var frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          var data = frame.split('\n').filter(function (l) { return l.indexOf('data:') === 0; })
+            .map(function (l) { return l.slice(5).trim(); }).join('');
+          if (!data) continue;
+          try { handle(JSON.parse(data)); } catch (_) {}
+        }
+      }
+      // Reload to render the canonical stored conversation.
+      window.location.reload();
+    } catch (err) {
+      live.textContent = '(connection error: ' + err.message + ' — falling back)';
+      // Graceful fallback to the blocking form post.
+      form.removeEventListener('submit', arguments.callee);
+      input.value = text; input.disabled = false;
+      form.submit();
+    }
+  });
+})();
+</script>
 {% endblock %}

@@ -57,6 +57,7 @@ pub fn router() -> Router<AppState> {
         .route("/accept-invite/{token}", get(accept_invite_view).post(accept_invite_submit))
         .route("/app/chat", get(chat_view))
         .route("/app/chat/messages", post(chat_send))
+        .route("/app/chat/stream", post(chat_stream))
         .route("/app/chat/clear", post(chat_clear_route))
         .route("/app/dashboard", get(dashboard))
         .route("/app/transactions", get(transactions_list))
@@ -176,7 +177,6 @@ struct ChatTpl {
     flash_kind: Option<String>,
     nav: NavCtx,
     messages: Vec<ChatGroup>,
-    api_key_set: bool,
 }
 
 pub struct ChatGroup {
@@ -997,8 +997,6 @@ async fn chat_view(State(state): State<AppState>, jar: CookieJar) -> Response {
         flash_kind: None,
         nav: build_nav(&state, &jar, user.id).await,
         messages,
-        // Chat runs on the agent daemon (subscription CLI auth) — no API key needed.
-        api_key_set: true,
     })
 }
 
@@ -1029,6 +1027,43 @@ async fn chat_send(
         tracing::error!(error = ?e, "agent chat turn failed");
     }
     Redirect::to("/app/chat").into_response()
+}
+
+/// SSE variant: relays the agent's stream-json events to the browser live,
+/// then persists the conversation exactly like the form path.
+async fn chat_stream(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Form(req): Form<ChatForm>,
+) -> Response {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use tokio_stream::StreamExt;
+
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let text = req.message.trim().to_string();
+    if text.is_empty() {
+        return (StatusCode::BAD_REQUEST, "empty message").into_response();
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<serde_json::Value>(64);
+    let pool = state.pool.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::ai::agent::stream_turn(&pool, user.id, company_id, text, tx).await {
+            tracing::error!(error = ?e, "agent stream turn failed");
+        }
+        // tx drops here -> stream ends -> browser sees the SSE close.
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(|v| Ok::<_, std::convert::Infallible>(Event::default().data(v.to_string())));
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
 
 async fn chat_clear_route(State(state): State<AppState>, jar: CookieJar) -> Response {
