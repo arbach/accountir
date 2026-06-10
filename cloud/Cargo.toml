@@ -14,6 +14,10 @@ license = "AGPL-3.0-or-later"
 name = "accountir-cloud"
 path = "src/main.rs"
 
+[[bin]]
+name = "accountir-agentd"
+path = "src/bin/agentd.rs"
+
 [dependencies]
 # Reuse pure domain + event types (no rusqlite, no TUI)
 accountir-core = { path = "../core" }

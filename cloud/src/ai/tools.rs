@@ -88,6 +88,72 @@ pub fn schemas() -> Vec<Value> {
                 "required": ["date", "memo", "lines"]
             }
         }),
+        json!({
+            "name": "trial_balance",
+            "description": "Trial balance: every account with total debits and credits (in dollars), plus grand totals.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "income_statement",
+            "description": "Income statement (P&L) for a date range: revenue and expense lines plus net income.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "string", "description": "YYYY-MM-DD"},
+                    "end": {"type": "string", "description": "YYYY-MM-DD"}
+                },
+                "required": ["start", "end"]
+            }
+        }),
+        json!({
+            "name": "balance_sheet",
+            "description": "Balance sheet as of a date: assets, liabilities, equity, net income, and whether it balances.",
+            "input_schema": {
+                "type": "object",
+                "properties": { "as_of": {"type": "string", "description": "YYYY-MM-DD"} },
+                "required": ["as_of"]
+            }
+        }),
+        json!({
+            "name": "cash_flow",
+            "description": "Simplified cash flow for a date range: opening/closing cash and change broken down by counterpart account.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "string", "description": "YYYY-MM-DD"},
+                    "end": {"type": "string", "description": "YYYY-MM-DD"}
+                },
+                "required": ["start", "end"]
+            }
+        }),
+        json!({
+            "name": "list_transactions",
+            "description": "List transaction lines, optionally filtered by date range, account_number, or memo search. Amounts in dollars (positive=debit). Default limit 50, max 200.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "string", "description": "YYYY-MM-DD"},
+                    "end": {"type": "string", "description": "YYYY-MM-DD"},
+                    "account_number": {"type": "string"},
+                    "search": {"type": "string", "description": "substring match on memo"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
+                }
+            }
+        }),
+        json!({
+            "name": "list_bank_connections",
+            "description": "List connected bank (Plaid) items: id, institution, status, last sync time.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "sync_bank",
+            "description": "Sync transactions from a connected bank item (by item id from list_bank_connections). Imports new bank transactions into the ledger.",
+            "input_schema": {
+                "type": "object",
+                "properties": { "item_id": {"type": "string", "description": "UUID of the bank connection"} },
+                "required": ["item_id"]
+            }
+        }),
     ]
 }
 
@@ -104,7 +170,166 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "get_account_balance" => get_account_balance_tool(ctx, input).await,
         "create_account" => create_account_tool(ctx, input).await,
         "post_journal_entry" => post_entry_tool(ctx, input).await,
+        "trial_balance" => trial_balance_tool(ctx).await,
+        "income_statement" => income_statement_tool(ctx, input).await,
+        "balance_sheet" => balance_sheet_tool(ctx, input).await,
+        "cash_flow" => cash_flow_tool(ctx, input).await,
+        "list_transactions" => list_transactions_tool(ctx, input).await,
+        "list_bank_connections" => list_bank_connections_tool(ctx).await,
+        // NOTE: "sync_bank" needs AppState (plaid config) and is handled by the
+        // MCP route layer before delegating here.
         other => json!({ "error": format!("unknown tool: {other}") }),
+    }
+}
+
+fn dollars(cents: i64) -> f64 {
+    cents as f64 / 100.0
+}
+
+fn parse_date(input: &Value, key: &str) -> Result<NaiveDate, Value> {
+    input
+        .get(key)
+        .and_then(|v| v.as_str())
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .ok_or_else(|| json!({ "error": format!("{key} must be YYYY-MM-DD") }))
+}
+
+fn report_lines(lines: &[queries::ReportLine]) -> Vec<Value> {
+    lines
+        .iter()
+        .map(|l| {
+            json!({
+                "account_number": l.account_number,
+                "name": l.name,
+                "amount": dollars(l.amount_cents),
+            })
+        })
+        .collect()
+}
+
+async fn trial_balance_tool(ctx: &ToolContext<'_>) -> Value {
+    match queries::trial_balance(ctx.pool, ctx.company_id).await {
+        Ok((rows, total_debit, total_credit)) => json!({
+            "rows": rows.iter().map(|r| json!({
+                "account_number": r.account_number,
+                "name": r.name,
+                "type": r.account_type,
+                "debit": dollars(r.debit_cents),
+                "credit": dollars(r.credit_cents),
+            })).collect::<Vec<_>>(),
+            "total_debit": dollars(total_debit),
+            "total_credit": dollars(total_credit),
+            "balanced": total_debit == total_credit,
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn income_statement_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let start = match parse_date(input, "start") { Ok(d) => d, Err(e) => return e };
+    let end = match parse_date(input, "end") { Ok(d) => d, Err(e) => return e };
+    match queries::income_statement(ctx.pool, ctx.company_id, start, end).await {
+        Ok(r) => json!({
+            "start": r.start.to_string(),
+            "end": r.end.to_string(),
+            "revenues": report_lines(&r.revenues),
+            "expenses": report_lines(&r.expenses),
+            "total_revenue": dollars(r.total_revenue_cents),
+            "total_expense": dollars(r.total_expense_cents),
+            "net_income": dollars(r.net_income_cents()),
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn balance_sheet_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let as_of = match parse_date(input, "as_of") { Ok(d) => d, Err(e) => return e };
+    match queries::balance_sheet(ctx.pool, ctx.company_id, as_of).await {
+        Ok(r) => json!({
+            "as_of": r.as_of.to_string(),
+            "assets": report_lines(&r.assets),
+            "liabilities": report_lines(&r.liabilities),
+            "equity": report_lines(&r.equity),
+            "net_income": dollars(r.net_income_cents),
+            "total_assets": dollars(r.total_assets_cents),
+            "total_liabilities": dollars(r.total_liab_cents),
+            "total_equity": dollars(r.total_equity_cents),
+            "balanced": r.total_assets_cents == r.liab_plus_equity_cents(),
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn cash_flow_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let start = match parse_date(input, "start") { Ok(d) => d, Err(e) => return e };
+    let end = match parse_date(input, "end") { Ok(d) => d, Err(e) => return e };
+    match queries::cash_flow(ctx.pool, ctx.company_id, start, end).await {
+        Ok(r) => json!({
+            "start": r.start.to_string(),
+            "end": r.end.to_string(),
+            "opening_cash": dollars(r.opening_cash_cents),
+            "closing_cash": dollars(r.closing_cash_cents),
+            "change": dollars(r.change_cents),
+            "by_counterpart_account": report_lines(&r.by_other_account),
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn list_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let account_id = match input.get("account_number").and_then(|v| v.as_str()) {
+        Some(num) => {
+            // Resolve via the tenant-aware query path (accounts table is FORCE RLS).
+            let accounts = match queries::list_accounts(ctx.pool, ctx.company_id).await {
+                Ok(a) => a,
+                Err(e) => return json!({ "error": format!("{e}") }),
+            };
+            match accounts.iter().find(|a| a.account_number == num) {
+                Some(a) => Some(a.id),
+                None => return json!({ "error": format!("no account with number '{num}'") }),
+            }
+        }
+        None => None,
+    };
+    let filter = queries::TransactionFilter {
+        start: input.get("start").and_then(|v| v.as_str()).and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
+        end: input.get("end").and_then(|v| v.as_str()).and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
+        account_id,
+        source: None,
+        search: input.get("search").and_then(|v| v.as_str()).map(str::to_string),
+        include_void: false,
+    };
+    let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(50).min(200) as usize;
+    match queries::list_transactions(ctx.pool, ctx.company_id, &filter).await {
+        Ok(lines) => json!({
+            "count": lines.len().min(limit),
+            "total_matching": lines.len(),
+            "transactions": lines.iter().take(limit).map(|t| json!({
+                "line_id": t.line_id,
+                "entry_id": t.entry_id,
+                "date": t.date.to_string(),
+                "memo": t.memo,
+                "account_number": t.account_number,
+                "account": t.account_name,
+                "amount": dollars(t.amount_cents),
+                "is_void": t.is_void,
+            })).collect::<Vec<_>>(),
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn list_bank_connections_tool(ctx: &ToolContext<'_>) -> Value {
+    match queries::list_plaid_items(ctx.pool, ctx.company_id).await {
+        Ok(items) => json!({
+            "items": items.iter().map(|i| json!({
+                "item_id": i.id,
+                "institution": i.institution_name,
+                "status": i.status,
+                "last_synced": i.last_synced_display(),
+            })).collect::<Vec<_>>(),
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
     }
 }
 
@@ -155,23 +380,32 @@ async fn get_account_balance_tool(ctx: &ToolContext<'_>, input: &Value) -> Value
         Some(s) => s,
         None => return json!({ "error": "missing account_number" }),
     };
-    let row: Option<(Uuid, String, i64)> = sqlx::query_as(
-        r#"
-        SELECT a.id, a.name,
-               COALESCE(SUM(jl.amount), 0)::BIGINT
-        FROM accounts a
-        LEFT JOIN journal_lines jl ON jl.account_id = a.id
-        LEFT JOIN journal_entries je ON je.id = jl.entry_id AND je.is_void = false
-        WHERE a.company_id = $1 AND a.account_number = $2 AND a.is_active = true
-        GROUP BY a.id, a.name
-        "#,
-    )
-    .bind(ctx.company_id)
-    .bind(acct_num)
-    .fetch_optional(ctx.pool)
-    .await
-    .ok()
-    .flatten();
+    // accounts/journal_lines are FORCE RLS — queries must run in a tenant-scoped tx.
+    let row: Option<(Uuid, String, i64)> = async {
+        let mut conn = ctx.pool.acquire().await.ok()?;
+        let mut tx = sqlx::Acquire::begin(&mut *conn).await.ok()?;
+        crate::store::event_store::set_tenant(&mut tx, ctx.company_id).await.ok()?;
+        let row: Option<(Uuid, String, i64)> = sqlx::query_as(
+            r#"
+            SELECT a.id, a.name,
+                   COALESCE(SUM(jl.amount), 0)::BIGINT
+            FROM accounts a
+            LEFT JOIN journal_lines jl ON jl.account_id = a.id
+            LEFT JOIN journal_entries je ON je.id = jl.entry_id AND je.is_void = false
+            WHERE a.company_id = $1 AND a.account_number = $2 AND a.is_active = true
+            GROUP BY a.id, a.name
+            "#,
+        )
+        .bind(ctx.company_id)
+        .bind(acct_num)
+        .fetch_optional(&mut *tx)
+        .await
+        .ok()
+        .flatten();
+        tx.commit().await.ok();
+        row
+    }
+    .await;
     match row {
         Some((id, name, cents)) => json!({
             "account_id": id,

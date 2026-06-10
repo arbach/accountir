@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::email::EmailClient;
 
 pub mod auth_routes;
+pub mod mcp_routes;
 pub mod plaid_routes;
 pub mod tenant_routes;
 
@@ -28,6 +29,7 @@ pub fn router(state: AppState) -> Router {
         .merge(auth_routes::router())
         .merge(tenant_routes::router())
         .merge(plaid_routes::router())
+        .merge(mcp_routes::router())
         .merge(crate::web::router())
         .layer(trace)
         .with_state(state)

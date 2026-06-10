@@ -997,7 +997,8 @@ async fn chat_view(State(state): State<AppState>, jar: CookieJar) -> Response {
         flash_kind: None,
         nav: build_nav(&state, &jar, user.id).await,
         messages,
-        api_key_set: state.config.anthropic_api_key.is_some(),
+        // Chat runs on the agent daemon (subscription CLI auth) — no API key needed.
+        api_key_set: true,
     })
 }
 
@@ -1019,16 +1020,13 @@ async fn chat_send(
         Some(c) => c,
         None => return forbidden(),
     };
-    let api_key = match state.config.anthropic_api_key.as_deref() {
-        Some(k) => k,
-        None => return Redirect::to("/app/chat").into_response(),
-    };
     let text = req.message.trim().to_string();
     if text.is_empty() {
         return Redirect::to("/app/chat").into_response();
     }
-    if let Err(e) = crate::ai::chat::send_message(&state.pool, api_key, user.id, company_id, text).await {
-        tracing::error!(error = ?e, "chat send failed");
+    // Turns run on the company's persistent Claude CLI session via accountir-agentd.
+    if let Err(e) = crate::ai::agent::send_turn(&state.pool, user.id, company_id, text).await {
+        tracing::error!(error = ?e, "agent chat turn failed");
     }
     Redirect::to("/app/chat").into_response()
 }
@@ -1043,6 +1041,8 @@ async fn chat_clear_route(State(state): State<AppState>, jar: CookieJar) -> Resp
         None => return forbidden(),
     };
     let _ = crate::ai::chat::clear_history(&state.pool, user.id, company_id).await;
+    // Also rotate the agent session so the AI genuinely forgets the conversation.
+    crate::ai::agent::reset_session(company_id).await;
     Redirect::to("/app/chat").into_response()
 }
 
