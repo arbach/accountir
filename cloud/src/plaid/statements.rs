@@ -29,16 +29,49 @@ pub fn extract_text(pdf: &[u8]) -> Result<String, String> {
     }
 }
 
-/// Extract text from a PDF, falling back to OCR (pdftoppm + tesseract) for
-/// scanned/image-only documents that have no text layer.
+/// Extract text from a PDF: poppler's pdftotext first (fast and robust —
+/// pdf-extract panics on many real bank statements), then pdf-extract as a
+/// fallback, then OCR (pdftoppm + tesseract) for scanned/image-only documents.
 pub async fn extract_text_or_ocr(pdf: &[u8]) -> Result<String, String> {
+    // A real text layer yields far more than stray whitespace/page numbers.
+    if let Ok(t) = pdftotext(pdf).await {
+        if t.trim().len() >= 50 {
+            return Ok(t);
+        }
+    }
     if let Ok(t) = extract_text(pdf) {
-        // A real text layer yields far more than stray whitespace/page numbers.
         if t.trim().len() >= 50 {
             return Ok(t);
         }
     }
     ocr_pdf(pdf).await
+}
+
+/// poppler `pdftotext -layout` via stdin/stdout.
+async fn pdftotext(pdf: &[u8]) -> Result<String, String> {
+    use tokio::io::AsyncWriteExt;
+    let mut child = tokio::process::Command::new("pdftotext")
+        .args(["-layout", "-", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("pdftotext failed to start: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let bytes = pdf.to_vec();
+        // Write in a task so a full stdout pipe can't deadlock us.
+        tokio::spawn(async move {
+            let _ = stdin.write_all(&bytes).await;
+        });
+    }
+    let out = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("pdftotext failed: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("pdftotext exited with {}", out.status));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 const OCR_MAX_PAGES: u32 = 25;
