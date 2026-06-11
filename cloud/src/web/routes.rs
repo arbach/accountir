@@ -2294,6 +2294,14 @@ async fn entry_unvoid(
 // Tax filing pipeline (profile → review → pull → fill → approve → mail)
 // ---------------------------------------------------------------------------
 
+/// One row of the tax-filing stepper. `state` is "done" | "current" | "todo".
+struct TaxStepTpl {
+    n: u8,
+    title: &'static str,
+    desc: &'static str,
+    state: &'static str,
+}
+
 #[derive(Template)]
 #[template(path = "tax_filing.html")]
 struct TaxFilingTpl {
@@ -2301,6 +2309,12 @@ struct TaxFilingTpl {
     flash: Option<String>,
     flash_kind: Option<String>,
     nav: NavCtx,
+    tax_steps: Vec<TaxStepTpl>,
+    /// What the Next button does: "form" (fill profile), "agent" (send
+    /// next_prompt to the AI), "approve" (review filled PDFs), "done".
+    next_kind: &'static str,
+    next_label: String,
+    next_prompt: String,
     profile_entity: String,
     profile_legal_name: String,
     profile_ein: String,
@@ -2339,11 +2353,90 @@ async fn tax_filing(State(state): State<AppState>, jar: CookieJar) -> Response {
         addr_field("zip"),
     );
     let forms = crate::tax::list_forms(&state.pool, company_id).await.unwrap_or_default();
+    let nav = build_nav(&state, &jar, user.id).await;
+
+    // Where are we in the pipeline? Steps the user can't do (books review,
+    // pulling and filling forms, mailing) are delegated to the agent by the
+    // Next button; steps that need a human (profile, approval) point at the UI.
+    let profile_complete = profile.as_ref().is_some_and(|p| {
+        !p.legal_name.trim().is_empty()
+            && p.address.get("line1").and_then(|v| v.as_str()).is_some_and(|s| !s.trim().is_empty())
+    });
+    let has_status = |s: &str| forms.iter().any(|f| f.status == s);
+    let all_mailed = !forms.is_empty() && forms.iter().all(|f| f.status == "mailed");
+    use chrono::Datelike;
+    let tax_year = Utc::now().date_naive().year() - 1;
+    let entity_label = match profile.as_ref().map(|p| p.entity_type.as_str()).unwrap_or("") {
+        "individual" => "individual / personal return (Form 1040)",
+        "schedule_c" => "sole proprietorship / single-member LLC (Schedule C)",
+        "s_corp" => "S corporation (Form 1120-S)",
+        "partnership" => "partnership (Form 1065)",
+        "c_corp" => "C corporation (Form 1120)",
+        _ => "business",
+    };
+    let company_name = nav.active_company_name.clone();
+    let (current, next_kind, next_label, next_prompt) = if !profile_complete {
+        (1u8, "form", "Next: complete the tax profile".to_string(), String::new())
+    } else if forms.is_empty() {
+        (2, "agent", format!("Next: AI reviews the books & prepares {tax_year} forms"), format!(
+            "Let's file my {tax_year} taxes for {company_name}. First, review the {tax_year} books \
+             using the accounting protocol and tell me what you found or fixed. Then determine which \
+             IRS forms a {entity_label} needs, pull them, and complete them from the ledger. \
+             Stop before approval — I will review and approve the filled forms on the Tax page myself."
+        ))
+    } else if has_status("fetched") {
+        (4, "agent", "Next: AI completes the pulled forms".to_string(), format!(
+            "Continue my {tax_year} tax filing for {company_name}: complete the already-pulled IRS \
+             forms from the ledger, line by line. Stop before approval — I will review and approve \
+             the filled forms on the Tax page myself."
+        ))
+    } else if has_status("filled") {
+        (5, "approve", "Next: review & approve the filled forms".to_string(), String::new())
+    } else if has_status("approved") {
+        (6, "agent", "Next: AI mails the approved forms".to_string(), format!(
+            "Mail my approved {tax_year} tax forms for {company_name} via Lob (certified mail), \
+             and confirm the tracking details."
+        ))
+    } else if all_mailed {
+        (7, "done", "Filing complete — all forms mailed".to_string(), String::new())
+    } else {
+        // Forms exist in mixed/unknown states; let the agent sort it out.
+        (4, "agent", "Next: AI continues the filing".to_string(), format!(
+            "Continue my {tax_year} tax filing for {company_name} from where it left off. \
+             Stop before approval — I will approve the filled forms myself."
+        ))
+    };
+    let step_defs: [(&'static str, &'static str); 6] = [
+        ("Tax profile", "entity type, legal name, EIN, mailing address — form below"),
+        ("Books review", "the AI runs the full accounting protocol (transfers, duplicates, credit cards) before any numbers are used"),
+        ("Pull forms", "the AI downloads the official IRS PDFs it determines you need"),
+        ("Complete", "the AI fills the forms from your ledger, line by line"),
+        ("Approve", "you review each filled PDF below and click Approve — nothing mails without it"),
+        ("Mail", "approved forms go out via Lob, certified, with delivery tracking"),
+    ];
+    let tax_steps = step_defs
+        .iter()
+        .enumerate()
+        .map(|(i, (title, desc))| {
+            let n = (i + 1) as u8;
+            TaxStepTpl {
+                n,
+                title,
+                desc,
+                state: if n < current { "done" } else if n == current { "current" } else { "todo" },
+            }
+        })
+        .collect();
+
     render(TaxFilingTpl {
         user_email: Some(user.email),
         flash: None,
         flash_kind: None,
-        nav: build_nav(&state, &jar, user.id).await,
+        nav,
+        tax_steps,
+        next_kind,
+        next_label,
+        next_prompt,
         profile_entity: profile.as_ref().map(|p| p.entity_type.clone()).unwrap_or_default(),
         profile_legal_name: profile.as_ref().map(|p| p.legal_name.clone()).unwrap_or_default(),
         profile_ein: profile.as_ref().map(|p| p.ein.clone()).unwrap_or_default(),

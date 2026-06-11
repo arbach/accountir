@@ -475,7 +475,10 @@
   document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('form[data-remember]').forEach(function (f) {
       f.addEventListener('submit', function () { saveFilters(f); });
-      if (window.location.search !== '') return;
+      // Loaded with explicit params (Apply, preset, drill-down link): the
+      // server has echoed them into the form — snapshot that as the
+      // remembered state so reloads and bare revisits come back to it.
+      if (window.location.search !== '') { saveFilters(f); return; }
       var saved = null;
       try { saved = JSON.parse(localStorage.getItem('filters:' + f.getAttribute('data-remember')) || 'null'); } catch (_) {}
       if (!saved) return;
@@ -701,6 +704,18 @@
           body: 'message=' + encodeURIComponent(text) });
       });
     });
+
+    // Let pages drive the assistant (e.g. the Tax "Next" button): open the
+    // panel, wait for history so the live turn isn't wiped, then run the turn.
+    window.aiwAsk = async function (text) {
+      panel.classList.add('open'); sset('aiwOpen', '1');
+      if (!loaded) { loaded = true; await loadHistory(); }
+      runTurn(text, function () {
+        return fetch('/app/chat/stream', { method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'message=' + encodeURIComponent(text) });
+      });
+    };
 
     function uploadFiles(fileList) {
       var fs = Array.prototype.slice.call(fileList); if (!fs.length) return;

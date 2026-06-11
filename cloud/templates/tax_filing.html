@@ -12,19 +12,29 @@
 {% endif %}
 
 <div class="card" style="margin-bottom: var(--gap);">
-  <div class="card-title">How it works</div>
-  <ol style="margin: 8px 0 4px 18px; font-size: 14px; line-height: 1.7;">
-    <li><strong>Tax profile</strong> — entity type, legal name, EIN, mailing address (form below).</li>
-    <li><strong>Books review</strong> — ask the AI assistant to "review the accounting for the tax year"; it runs the full protocol (transfers, duplicates, credit cards) before any numbers are used.</li>
-    <li><strong>Pull forms</strong> — the assistant downloads the official IRS PDFs it determines you need (e.g. Schedule C, 4562, 1099-NEC).</li>
-    <li><strong>Complete</strong> — the assistant fills the forms from your ledger, line by line.</li>
-    <li><strong>Approve</strong> — you review each filled PDF below and click Approve. Nothing can be mailed without this.</li>
-    <li><strong>Mail</strong> — the assistant (or you) mails approved forms via Lob, certified by default, with delivery tracking.</li>
+  <div class="card-title" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+    <span>Filing progress</span>
+    {% if next_kind == "done" %}
+    <span class="badge" style="background:#16a34a; color:#fff;">{{ next_label }} ✓</span>
+    {% else %}
+    <button id="tax-next" class="btn btn-primary" data-kind="{{ next_kind }}" data-prompt="{{ next_prompt }}">{{ next_label }} →</button>
+    {% endif %}
+  </div>
+  <ol style="margin: 8px 0 4px 0; padding: 0; list-style: none; font-size: 14px; line-height: 1.7;">
+    {% for s in tax_steps %}
+    <li style="display:flex; gap:10px; align-items:baseline; {% if s.state == "todo" %}opacity:.55;{% endif %}">
+      <span style="flex:0 0 22px; height:22px; border-radius:50%; text-align:center; font-size:12px; line-height:22px; font-weight:600;
+        {% if s.state == "done" %}background:#16a34a; color:#fff;{% else if s.state == "current" %}background:var(--accent, #2563eb); color:#fff;{% else %}background:var(--border, #ddd);{% endif %}">
+        {% if s.state == "done" %}✓{% else %}{{ s.n }}{% endif %}</span>
+      <div><strong>{{ s.title }}</strong>{% if s.state == "current" %} <span class="badge">you are here</span>{% endif %}
+        <span class="muted">— {{ s.desc }}</span></div>
+    </li>
+    {% endfor %}
   </ol>
-  <div class="muted" style="font-size: 12px;">Start by telling the AI assistant: <em>"prepare my {{ nav.active_company_name }} taxes"</em>.</div>
+  <div class="muted" style="font-size: 12px; margin-top: 6px;">The Next button runs the current step: AI steps are handed to the assistant automatically; profile and approval need you.</div>
 </div>
 
-<div class="card" style="margin-bottom: var(--gap);">
+<div class="card" id="tax-profile-card" style="margin-bottom: var(--gap);">
   <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
     <span>Step 1 · Tax profile</span>
     <form method="post" action="/app/tax/profile/upload" enctype="multipart/form-data" style="display:inline;">
@@ -59,7 +69,7 @@
   </form>
 </div>
 
-<div class="card">
+<div class="card" id="tax-forms-card">
   <div class="card-title">Forms in the pipeline</div>
   {% if forms.is_empty() %}
   <p class="muted" style="font-size: 13px;">No forms yet. Ask the AI assistant to start your tax filing — it pulls the right IRS forms and completes them from the ledger.</p>
@@ -96,4 +106,35 @@
   </div>
   {% endif %}
 </div>
+
+<script>
+(function () {
+  var btn = document.getElementById('tax-next');
+  if (!btn) return;
+  function spotlight(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.style.transition = 'box-shadow .3s';
+    el.style.boxShadow = '0 0 0 3px var(--accent, #2563eb)';
+    setTimeout(function () { el.style.boxShadow = ''; }, 1800);
+  }
+  btn.addEventListener('click', function () {
+    var kind = btn.dataset.kind;
+    if (kind === 'form') {
+      spotlight('tax-profile-card');
+      var f = document.querySelector('#tax-profile-card input[name="legal_name"]');
+      if (f) f.focus();
+    } else if (kind === 'approve') {
+      spotlight('tax-forms-card');
+    } else if (kind === 'agent') {
+      if (window.aiwAsk) {
+        btn.disabled = true;
+        btn.textContent = 'Handed to the AI — watch the chat…';
+        aiwAsk(btn.dataset.prompt);
+      }
+    }
+  });
+})();
+</script>
 {% endblock %}
