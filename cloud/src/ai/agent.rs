@@ -57,7 +57,17 @@ pub async fn stream_turn_with_display(
     let mut assistant_msgs: Vec<Value> = Vec::new();
     let mut daemon_err: Option<String> = None;
 
-    while let Some(chunk) = resp.chunk().await? {
+    loop {
+        // A dropped daemon connection mid-turn must not discard what the
+        // agent already said — break and persist what we have.
+        let chunk = match resp.chunk().await {
+            Ok(Some(c)) => c,
+            Ok(None) => break,
+            Err(e) => {
+                daemon_err = Some(format!("stream interrupted: {e}"));
+                break;
+            }
+        };
         buf.extend_from_slice(&chunk);
         while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = buf.drain(..=pos).collect();
