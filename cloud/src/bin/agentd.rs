@@ -205,6 +205,21 @@ fn user_turn_line(message: &str) -> anyhow::Result<String> {
     }))? + "\n")
 }
 
+/// A `--resume` against a session whose conversation file is gone (deleted, or
+/// never persisted because an earlier turn crashed) ends in a `result` event
+/// flagged `is_error` with "No conversation found" among its errors. Without
+/// this, the loop treats that error result as a normal completion and the
+/// session fails to resume forever. Detecting it lets us drop the dead session
+/// and start fresh.
+fn is_resume_failure(v: &Value) -> bool {
+    if v.get("is_error").and_then(|b| b.as_bool()) != Some(true) {
+        return false;
+    }
+    let errs = v.get("errors").map(|e| e.to_string()).unwrap_or_default();
+    let result = v.get("result").and_then(|r| r.as_str()).unwrap_or_default();
+    errs.contains("No conversation found") || result.contains("No conversation found")
+}
+
 /// Run one turn against the (possibly fresh) agent process, forwarding every
 /// stream-json event line into `tx` AS IT ARRIVES, through the terminating
 /// `result` event.
@@ -240,6 +255,7 @@ async fn run_turn(
 
     let mut forwarded = 0usize;
     let mut respawned = false;
+    let mut session_reset = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(d.cfg.turn_timeout_secs);
     // A healthy turn emits its first stream event within seconds. Total silence
     // means the process wedged (seen in production after multi-turn stdin use):
@@ -271,12 +287,34 @@ async fn run_turn(
             }
             Ok(Ok(Some(l))) => {
                 let Ok(v) = serde_json::from_str::<Value>(&l) else { continue };
-                let done = v.get("type").and_then(|t| t.as_str()) == Some("result");
+                let is_result = v.get("type").and_then(|t| t.as_str()) == Some("result");
+                // Resume hit a session whose conversation is gone. Don't forward
+                // the error to the client — drop the dead session, respawn with a
+                // fresh one (no --resume), and replay the turn once.
+                if is_result && !session_reset && is_resume_failure(&v) {
+                    tracing::warn!(company = %company_id,
+                        "resume failed (stale session); dropping it and starting fresh");
+                    session_reset = true;
+                    let _ = sqlx::query("DELETE FROM agent_sessions WHERE company_id = $1")
+                        .bind(company_id)
+                        .execute(&d.pool)
+                        .await;
+                    *slot = None;
+                    let (sid, tok, _) = ensure_session_row(&d.pool, company_id).await?;
+                    *slot = Some(spawn_proc(&d.cfg, company_id, sid, &tok, false).await?);
+                    let proc = slot.as_mut().unwrap();
+                    proc.stdin.write_all(line.as_bytes()).await?;
+                    proc.stdin.flush().await?;
+                    forwarded = 0;
+                    first_event_deadline = tokio::time::Instant::now()
+                        + Duration::from_secs(d.cfg.first_event_timeout_secs);
+                    continue;
+                }
                 forwarded += 1;
                 // Forward the raw line immediately; receiver gone = client hung up,
                 // but we still drain to the result so the session stays consistent.
                 let _ = tx.send(Ok(Bytes::from(l + "\n"))).await;
-                if done {
+                if is_result {
                     break;
                 }
             }
