@@ -69,6 +69,7 @@ pub fn router() -> Router<AppState> {
             post(chat_upload).layer(axum::extract::DefaultBodyLimit::max(500 * 1024 * 1024)),
         )
         .route("/app/chat/clear", post(chat_clear_route))
+        .route("/app/chat/stop", post(chat_stop))
         .route("/app/dashboard", get(dashboard))
         .route("/app/tax", get(tax_filing))
         .route("/app/tax/profile", post(tax_profile_save))
@@ -95,6 +96,20 @@ pub fn router() -> Router<AppState> {
         .route("/app/reports/income-statement", get(report_income))
         .route("/app/reports/balance-sheet", get(report_balance_sheet))
         .route("/app/reports/cash-flow", get(report_cash_flow))
+        .route("/app/documents", get(documents_list))
+        .route(
+            "/app/documents/upload",
+            post(documents_upload).layer(axum::extract::DefaultBodyLimit::max(500 * 1024 * 1024)),
+        )
+        .route("/app/documents/{id}/download", get(file_download))
+        .route("/app/documents/{id}/delete", post(file_delete))
+        .route("/app/documents/{id}/year", post(document_set_year))
+        .route("/app/wise", get(wise_view))
+        .route("/app/wise/sync", post(wise_sync))
+        // Back-compat: the store was formerly the "Files" tab.
+        .route("/app/files", get(|| async { Redirect::permanent("/app/documents") }))
+        .route("/app/address-book", get(address_book_list).post(address_label_create))
+        .route("/app/address-book/{id}/delete", post(address_label_delete))
         .route("/app/customers", get(customers_list).post(customer_create))
         .route("/app/customers/new", get(customer_new_view))
         .route("/app/invoices", get(invoices_list).post(invoice_create))
@@ -288,6 +303,7 @@ struct TransactionsTpl {
     selected_type: Option<String>,
     min_amount_str: String,
     max_amount_str: String,
+    selected_sort: String,
 }
 
 #[derive(Template)]
@@ -430,6 +446,41 @@ async fn active_company(
         }
     }
     queries::resolve_company_id(&state.pool, user_id).await.ok().flatten()
+}
+
+/// `?company=<uuid>` carried by a chat request so a browser tab stays pinned to
+/// the company it rendered with, independent of the shared active-company
+/// cookie. Optional/lenient: absent or malformed values fall back to the cookie.
+#[derive(Deserialize, Default)]
+struct ChatScope {
+    company: Option<String>,
+}
+
+impl ChatScope {
+    fn id(&self) -> Option<Uuid> {
+        self.company.as_deref().and_then(|s| Uuid::parse_str(s.trim()).ok())
+    }
+}
+
+/// Resolve the company for a chat request: honor an explicit per-tab company
+/// when the user is a member of it (same membership gate the cookie uses), else
+/// fall back to the shared active-company cookie. This is purely additive — a
+/// request without `?company=` behaves exactly as before.
+async fn chat_company(
+    state: &AppState,
+    jar: &CookieJar,
+    explicit: Option<Uuid>,
+    user_id: Uuid,
+) -> Option<Uuid> {
+    if let Some(uuid) = explicit {
+        if queries::user_has_membership(&state.pool, user_id, uuid)
+            .await
+            .unwrap_or(false)
+        {
+            return Some(uuid);
+        }
+    }
+    active_company(state, jar, user_id).await
 }
 
 fn build_active_company_cookie(state: &AppState, company_id: Uuid) -> Cookie<'static> {
@@ -982,21 +1033,9 @@ fn render_chat_message(m: &crate::ai::chat::StoredMessage) -> ChatGroup {
                             lines.push(ChatLine { role: role.clone(), body: txt });
                         }
                     }
-                    "tool_use" => {
-                        let name = b.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                        let input = b.get("input").map(|v| v.to_string()).unwrap_or_default();
-                        lines.push(ChatLine {
-                            role: format!("{} · tool_use ({})", role, name),
-                            body: input,
-                        });
-                    }
-                    "tool_result" => {
-                        let content = b.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                        lines.push(ChatLine {
-                            role: format!("{} · tool_result", role),
-                            body: content.to_string(),
-                        });
-                    }
+                    // Tool calls and their results are internal bookkeeping
+                    // operations — never surfaced in the chat transcript.
+                    "tool_use" | "tool_result" => {}
                     _ => {}
                 }
             }
@@ -1006,12 +1045,16 @@ fn render_chat_message(m: &crate::ai::chat::StoredMessage) -> ChatGroup {
     ChatGroup { lines }
 }
 
-async fn chat_view(State(state): State<AppState>, jar: CookieJar) -> Response {
+async fn chat_view(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(scope): axum::extract::Query<ChatScope>,
+) -> Response {
     let user = match require_user(&state, &jar).await {
         Ok(u) => u,
         Err(r) => return r,
     };
-    let company_id = match active_company(&state, &jar, user.id).await {
+    let company_id = match chat_company(&state, &jar, scope.id(), user.id).await {
         Some(c) => c,
         None => return forbidden(),
     };
@@ -1036,13 +1079,14 @@ struct ChatForm {
 async fn chat_send(
     State(state): State<AppState>,
     jar: CookieJar,
+    axum::extract::Query(scope): axum::extract::Query<ChatScope>,
     Form(req): Form<ChatForm>,
 ) -> Response {
     let user = match require_user(&state, &jar).await {
         Ok(u) => u,
         Err(r) => return r,
     };
-    let company_id = match active_company(&state, &jar, user.id).await {
+    let company_id = match chat_company(&state, &jar, scope.id(), user.id).await {
         Some(c) => c,
         None => return forbidden(),
     };
@@ -1062,6 +1106,7 @@ async fn chat_send(
 async fn chat_stream(
     State(state): State<AppState>,
     jar: CookieJar,
+    axum::extract::Query(scope): axum::extract::Query<ChatScope>,
     Form(req): Form<ChatForm>,
 ) -> Response {
     use axum::response::sse::{Event, KeepAlive, Sse};
@@ -1071,7 +1116,7 @@ async fn chat_stream(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let company_id = match active_company(&state, &jar, user.id).await {
+    let company_id = match chat_company(&state, &jar, scope.id(), user.id).await {
         Some(c) => c,
         None => return forbidden(),
     };
@@ -1100,6 +1145,7 @@ async fn chat_stream(
 async fn chat_upload(
     State(state): State<AppState>,
     jar: CookieJar,
+    axum::extract::Query(scope): axum::extract::Query<ChatScope>,
     mut multipart: axum::extract::Multipart,
 ) -> Response {
     use axum::response::sse::{Event, KeepAlive, Sse};
@@ -1109,7 +1155,7 @@ async fn chat_upload(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let company_id = match active_company(&state, &jar, user.id).await {
+    let company_id = match chat_company(&state, &jar, scope.id(), user.id).await {
         Some(c) => c,
         None => return forbidden(),
     };
@@ -1138,12 +1184,33 @@ async fn chat_upload(
         return (StatusCode::BAD_REQUEST, "at most 100 files per upload").into_response();
     }
 
+    // Retain the original bytes of everything dropped into chat, deduped, so
+    // the agent's source documents are kept for reference on the Files page.
+    // Capture each file's id so the agent can re-file it under another entity
+    // (the owner's personal session can move docs to the company they belong to).
+    let mut stored_ids: Vec<(String, Option<Uuid>)> = Vec::new();
+    for (fname, bytes) in &files {
+        let ctype = if bytes.starts_with(b"%PDF") { "application/pdf" } else { "text/plain" };
+        let year = crate::file_store::detect_year(fname, None);
+        let id = store_company_file(&state.pool, company_id, "chat", fname, ctype, bytes, year).await;
+        stored_ids.push((fname.clone(), id));
+    }
+
     // Respond with the SSE stream IMMEDIATELY and extract inside it: OCR of a
     // large scanned batch takes minutes, and the SSO proxy 502s any request
     // that hasn't produced response headers within ~30s. Progress events keep
     // the chat UI informed while extraction runs.
     let names: Vec<String> = files.iter().map(|(n, _)| n.clone()).collect();
     let display = format!("📎 Uploaded: {}", names.join(", "));
+    // Only the owner's personal session can re-file a doc to another entity, so
+    // only it gets the move_file routing hint.
+    let is_personal: bool = sqlx::query_scalar("SELECT is_personal FROM companies WHERE id = $1")
+        .bind(company_id)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false);
     let (tx, rx) = tokio::sync::mpsc::channel::<serde_json::Value>(64);
     let pool = state.pool.clone();
     tokio::spawn(async move {
@@ -1201,8 +1268,28 @@ async fn chat_upload(
                 "note": format!("All {total} file(s) read — the agent is looking at them…"),
             }))
             .await;
+        // Manifest: tell the agent the retained file ids so it can re-file a
+        // document under the entity it belongs to (personal/owner session only).
+        let manifest = if is_personal {
+            let lines: String = stored_ids
+                .iter()
+                .filter_map(|(n, id)| id.map(|i| format!("  - file_id {i} = \"{n}\"\n")))
+                .collect();
+            if lines.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n[These files are retained under THIS personal entity:\n{lines}\
+                     If a document clearly belongs to one of your other entities, (1) call move_file \
+                     with its file_id and to_entity to file the original under that entity, and (2) post \
+                     its accounting there using the entity parameter. State which entity you filed each under.]\n"
+                )
+            }
+        } else {
+            String::new()
+        };
         let agent_text = format!(
-            "[The user uploaded {total} file(s) in chat: {}. Their extracted text follows.]\n\n{sections}\
+            "[The user uploaded {total} file(s) in chat: {}. Their extracted text follows.]\n\n{sections}{manifest}\
              [End of uploaded files. Briefly say what each file appears to contain, then ask what the \
              user would like done with them — unless their intent is already clear from the conversation.]",
             names.join(", "),
@@ -1222,12 +1309,16 @@ async fn chat_upload(
 }
 
 /// JSON history for the floating chat widget: flat [{role, body}] lines.
-async fn chat_history(State(state): State<AppState>, jar: CookieJar) -> Response {
+async fn chat_history(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(scope): axum::extract::Query<ChatScope>,
+) -> Response {
     let user = match require_user(&state, &jar).await {
         Ok(u) => u,
         Err(r) => return r,
     };
-    let company_id = match active_company(&state, &jar, user.id).await {
+    let company_id = match chat_company(&state, &jar, scope.id(), user.id).await {
         Some(c) => c,
         None => return forbidden(),
     };
@@ -1243,12 +1334,30 @@ async fn chat_history(State(state): State<AppState>, jar: CookieJar) -> Response
     Json(serde_json::json!({ "lines": lines })).into_response()
 }
 
-async fn chat_clear_route(State(state): State<AppState>, jar: CookieJar) -> Response {
+/// POST /app/chat/stop — stop the in-flight agent turn for the active company.
+async fn chat_stop(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(scope): axum::extract::Query<ChatScope>,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match chat_company(&state, &jar, scope.id(), user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    crate::ai::agent::cancel_turn(company_id).await;
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+async fn chat_clear_route(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(scope): axum::extract::Query<ChatScope>,
+) -> Response {
     let user = match require_user(&state, &jar).await {
         Ok(u) => u,
         Err(r) => return r,
     };
-    let company_id = match active_company(&state, &jar, user.id).await {
+    let company_id = match chat_company(&state, &jar, scope.id(), user.id).await {
         Some(c) => c,
         None => return forbidden(),
     };
@@ -2111,6 +2220,37 @@ struct TxFilterQuery {
     direction: Option<String>,
     min_amount: Option<String>,
     max_amount: Option<String>,
+    sort: Option<String>,
+}
+
+/// Prefix the address-book name in front of any known 0x… wallet address in a
+/// memo, keeping the full address (e.g. "VeraLabs 0x0a3d30b5…ad8168" full).
+/// Unknown addresses are left unchanged.
+fn relabel_wallets(memo: &str, labels: &std::collections::HashMap<String, String>) -> String {
+    let b = memo.as_bytes();
+    let mut out = String::with_capacity(memo.len());
+    let mut i = 0;
+    while i < memo.len() {
+        if b[i] == b'0' && i + 1 < memo.len() && (b[i + 1] | 0x20) == b'x' {
+            let mut j = i + 2;
+            while j < memo.len() && b[j].is_ascii_hexdigit() {
+                j += 1;
+            }
+            let addr = &memo[i..j];
+            if addr.len() >= 12 {
+                match labels.get(&addr.to_lowercase()) {
+                    Some(name) => out.push_str(&format!("{name} {addr}")),
+                    None => out.push_str(addr),
+                }
+                i = j;
+                continue;
+            }
+        }
+        let ch = memo[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 /// Tolerant dollar-amount parse for filter inputs ("100", "1,250.50", "$40").
@@ -2146,6 +2286,10 @@ async fn transactions_list(
         .map(str::to_string);
     let min_cents = q.min_amount.as_deref().and_then(parse_filter_amount_cents);
     let max_cents = q.max_amount.as_deref().and_then(parse_filter_amount_cents);
+    let sort = match q.sort.as_deref() {
+        Some(s @ ("date_asc" | "amount_desc" | "amount_asc")) => s.to_string(),
+        _ => "date_desc".to_string(),
+    };
     let filter = queries::TransactionFilter {
         start, end, account_id,
         source: source.clone(),
@@ -2154,10 +2298,24 @@ async fn transactions_list(
         direction: direction.clone(),
         min_cents,
         max_cents,
+        sort: Some(sort.clone()),
     };
-    let rows = queries::list_transactions(&state.pool, company_id, &filter)
+    let mut rows = queries::list_transactions(&state.pool, company_id, &filter)
         .await
         .unwrap_or_default();
+    // Shorten wallet addresses and apply address-book names in the displayed memo.
+    let labels: std::collections::HashMap<String, String> =
+        queries::list_address_labels(&state.pool, company_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|l| (l.address, l.name))
+            .collect();
+    if !labels.is_empty() {
+        for r in rows.iter_mut() {
+            r.memo_display = relabel_wallets(&r.memo, &labels);
+        }
+    }
     let accounts = queries::list_accounts(&state.pool, company_id).await.unwrap_or_default();
     render(TransactionsTpl {
         user_email: Some(user.email),
@@ -2175,6 +2333,7 @@ async fn transactions_list(
         selected_type: direction,
         min_amount_str: q.min_amount.unwrap_or_default(),
         max_amount_str: q.max_amount.unwrap_or_default(),
+        selected_sort: sort,
     })
 }
 
@@ -3174,6 +3333,364 @@ struct InvoicePublicTpl {
     invoice: queries::InvoiceDetail,
     company_name: String,
     company_subtitle: String,
+}
+
+// --- Company file store ----------------------------------------------------
+
+use crate::file_store::store_company_file;
+
+/// One year's worth of documents for the grouped Documents view. `label` is the
+/// year as a string, or "Undated" for files whose period year is unknown.
+struct DocYearGroup {
+    label: String,
+    files: Vec<queries::CompanyFileRow>,
+}
+
+#[derive(Template)]
+#[template(path = "documents.html")]
+struct DocumentsTpl {
+    user_email: Option<String>,
+    flash: Option<String>,
+    flash_kind: Option<String>,
+    nav: NavCtx,
+    groups: Vec<DocYearGroup>,
+    total: usize,
+    all_years: Vec<String>,
+    all_categories: Vec<String>,
+    selected_year: String,
+    selected_category: String,
+    search: String,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct DocFilter {
+    year: Option<String>,
+    category: Option<String>,
+    q: Option<String>,
+}
+
+/// Group the company's files by period/tax year (newest first, "Undated" last).
+/// list_company_files already orders by doc_year DESC NULLS LAST.
+fn group_files_by_year(files: Vec<queries::CompanyFileRow>) -> Vec<DocYearGroup> {
+    let mut groups: Vec<DocYearGroup> = Vec::new();
+    for f in files {
+        let label = match f.doc_year {
+            Some(y) => y.to_string(),
+            None => "Undated".to_string(),
+        };
+        match groups.last_mut() {
+            Some(g) if g.label == label => g.files.push(f),
+            _ => groups.push(DocYearGroup { label, files: vec![f] }),
+        }
+    }
+    groups
+}
+
+async fn documents_list(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(f): axum::extract::Query<DocFilter>,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    let files = queries::list_company_files(&state.pool, company_id).await.unwrap_or_default();
+
+    // Dropdown options from the full set (before filtering).
+    let mut all_years: Vec<String> = files.iter()
+        .map(|r| r.doc_year.map(|y| y.to_string()).unwrap_or_else(|| "Undated".to_string()))
+        .collect();
+    all_years.sort_by(|a, b| b.cmp(a)); // desc; "Undated" sorts after digits
+    all_years.dedup();
+    let mut all_categories: Vec<String> = files.iter().map(|r| r.category.clone()).collect();
+    all_categories.sort();
+    all_categories.dedup();
+
+    let sel_year = f.year.unwrap_or_default();
+    let sel_cat = f.category.unwrap_or_default();
+    let search = f.q.unwrap_or_default();
+    let needle = search.trim().to_lowercase();
+
+    let filtered: Vec<queries::CompanyFileRow> = files.into_iter().filter(|r| {
+        let yr = r.doc_year.map(|y| y.to_string()).unwrap_or_else(|| "Undated".to_string());
+        (sel_year.is_empty() || yr == sel_year)
+            && (sel_cat.is_empty() || r.category == sel_cat)
+            && (needle.is_empty() || r.filename.to_lowercase().contains(&needle))
+    }).collect();
+    let total = filtered.len();
+
+    render(DocumentsTpl {
+        user_email: Some(user.email),
+        flash: None, flash_kind: None,
+        nav: build_nav(&state, &jar, user.id).await,
+        groups: group_files_by_year(filtered),
+        total,
+        all_years,
+        all_categories,
+        selected_year: sel_year,
+        selected_category: sel_cat,
+        search,
+    })
+}
+
+async fn documents_upload(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    let mut category = "other".to_string();
+    // Optional year override from the form; applies to every file in the batch.
+    let mut year_override: Option<i32> = None;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        match field.name() {
+            Some("category") => {
+                category = field.text().await.unwrap_or_default();
+                if !matches!(category.as_str(), "statement" | "tax" | "other") {
+                    category = "other".to_string();
+                }
+            }
+            Some("doc_year") => {
+                year_override = field
+                    .text()
+                    .await
+                    .ok()
+                    .and_then(|s| s.trim().parse::<i32>().ok())
+                    .filter(|y| (2000..=2099).contains(y));
+            }
+            Some("file") => {
+                let filename = field.file_name().unwrap_or("upload.bin").to_string();
+                let content_type = field
+                    .content_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                let Ok(bytes) = field.bytes().await else { continue };
+                let year = year_override.or_else(|| crate::file_store::detect_year(&filename, None));
+                let _ = store_company_file(
+                    &state.pool, company_id, &category, &filename, &content_type, &bytes, year,
+                ).await;
+            }
+            _ => {}
+        }
+    }
+    Redirect::to("/app/documents").into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct DocYearForm {
+    doc_year: String,
+}
+
+async fn document_set_year(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+    axum::extract::Form(form): axum::extract::Form<DocYearForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    let year = form.doc_year.trim().parse::<i32>().ok().filter(|y| (2000..=2099).contains(y));
+    let _ = queries::update_company_file_year(&state.pool, company_id, id, year).await;
+    Redirect::to("/app/documents").into_response()
+}
+
+async fn file_download(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    match queries::get_company_file(&state.pool, company_id, id).await {
+        Ok(Some(f)) => match std::fs::read(&f.stored_path) {
+            Ok(bytes) => (
+                [
+                    (axum::http::header::CONTENT_TYPE, f.content_type),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        format!("inline; filename=\"{}\"", f.filename.replace('"', "")),
+                    ),
+                ],
+                bytes,
+            )
+                .into_response(),
+            Err(_) => (StatusCode::NOT_FOUND, "file missing on disk").into_response(),
+        },
+        Ok(None) => (StatusCode::NOT_FOUND, "file not found").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "could not load file").into_response(),
+    }
+}
+
+async fn file_delete(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    if let Ok(Some(path)) = queries::delete_company_file(&state.pool, company_id, id).await {
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+    Redirect::to("/app/documents").into_response()
+}
+
+// --- Wise integration -------------------------------------------------------
+
+struct WisePayeeRow {
+    recipient: String,
+    total: String,
+    count: i64,
+    currencies: String,
+    is_self: bool,
+}
+
+#[derive(Template)]
+#[template(path = "wise.html")]
+struct WiseTpl {
+    user_email: Option<String>,
+    flash: Option<String>,
+    flash_kind: Option<String>,
+    nav: NavCtx,
+    connected: bool,
+    label: String,
+    payees: Vec<WisePayeeRow>,
+    external_total: String,
+    self_total: String,
+    txn_count: usize,
+}
+
+fn cents(c: i64) -> String {
+    let neg = c < 0;
+    let a = c.abs();
+    let s = format!("{}.{:02}", a / 100, a % 100);
+    // thousands separators on the integer part
+    let (int_part, frac) = s.split_once('.').unwrap();
+    let mut out = String::new();
+    for (i, ch) in int_part.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 { out.push(','); }
+        out.push(ch);
+    }
+    let int_fmt: String = out.chars().rev().collect();
+    format!("{}{}.{}", if neg { "-" } else { "" }, int_fmt, frac)
+}
+
+async fn wise_view(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    let conn = crate::wise::get_connection(&state.pool, company_id).await.ok().flatten();
+    let payees = crate::wise::payees(&state.pool, company_id).await.unwrap_or_default();
+    let mut ext = 0i64;
+    let mut slf = 0i64;
+    let mut cnt = 0usize;
+    let rows: Vec<WisePayeeRow> = payees.into_iter().map(|p| {
+        cnt += p.count as usize;
+        if p.is_self { slf += p.total_cents } else { ext += p.total_cents }
+        WisePayeeRow {
+            recipient: p.recipient, total: cents(p.total_cents), count: p.count,
+            currencies: p.currencies, is_self: p.is_self,
+        }
+    }).collect();
+    render(WiseTpl {
+        user_email: Some(user.email),
+        flash: None, flash_kind: None,
+        nav: build_nav(&state, &jar, user.id).await,
+        connected: conn.is_some(),
+        label: conn.map(|c| c.label).unwrap_or_default(),
+        payees: rows,
+        external_total: cents(ext),
+        self_total: cents(slf),
+        txn_count: cnt,
+    })
+}
+
+async fn wise_sync(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    match crate::wise::sync(&state.pool, company_id, 2025).await {
+        Ok((n, ext)) => tracing::info!(company=%company_id, transfers=n, external=ext, "wise sync ok"),
+        Err(e) => tracing::error!(company=%company_id, error=%e, "wise sync failed"),
+    }
+    Redirect::to("/app/wise").into_response()
+}
+
+#[derive(Template)]
+#[template(path = "address_book.html")]
+struct AddressBookTpl {
+    user_email: Option<String>,
+    flash: Option<String>,
+    flash_kind: Option<String>,
+    nav: NavCtx,
+    labels: Vec<queries::AddressLabelRow>,
+}
+
+async fn address_book_list(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    let labels = queries::list_address_labels(&state.pool, company_id).await.unwrap_or_default();
+    render(AddressBookTpl {
+        user_email: Some(user.email),
+        flash: None, flash_kind: None,
+        nav: build_nav(&state, &jar, user.id).await,
+        labels,
+    })
+}
+
+#[derive(Deserialize)]
+struct AddressLabelForm {
+    address: String,
+    name: String,
+    kind: Option<String>,
+    account_code: Option<String>,
+    note: Option<String>,
+}
+
+async fn address_label_create(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Form(f): axum::extract::Form<AddressLabelForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    if !f.address.trim().is_empty() && !f.name.trim().is_empty() {
+        let _ = queries::upsert_address_label(
+            &state.pool, company_id, &f.address, &f.name,
+            f.kind.as_deref().unwrap_or(""),
+            f.account_code.as_deref().unwrap_or(""),
+            f.note.as_deref().unwrap_or(""),
+        ).await;
+    }
+    Redirect::to("/app/address-book").into_response()
+}
+
+async fn address_label_delete(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    let _ = queries::delete_address_label(&state.pool, company_id, id).await;
+    Redirect::to("/app/address-book").into_response()
 }
 
 async fn customers_list(State(state): State<AppState>, jar: CookieJar) -> Response {

@@ -256,6 +256,24 @@ impl PlaidClient {
             .await?;
         Ok(())
     }
+
+    /// `/webhook_verification_key/get` — fetches the public JWK used to verify
+    /// the `Plaid-Verification` JWS on an incoming webhook. Returns the `key`
+    /// object (a JWK with `kty`, `crv`, `x`, `y`, `kid`, `expired_at`, ...).
+    pub async fn webhook_verification_key_get(
+        &self,
+        key_id: &str,
+    ) -> Result<Value, PlaidError> {
+        let resp = self
+            .post(
+                "/webhook_verification_key/get",
+                json!({ "key_id": key_id }),
+            )
+            .await?;
+        resp.get("key")
+            .cloned()
+            .ok_or(PlaidError::MissingField("key"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

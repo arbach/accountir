@@ -116,6 +116,18 @@ fn mcp_tool_list(is_personal: bool) -> Vec<Value> {
             "description": "List every entity (company) this user can manage, including this personal one. Use the returned name as the `entity` parameter on any other tool to operate on that entity.",
             "inputSchema": { "type": "object", "properties": {} }
         }));
+        out.push(json!({
+            "name": "move_file",
+            "description": "Re-file a document that was uploaded into this personal session so it is stored under the entity it actually belongs to. Use the file_id from the upload manifest. The original bytes are moved to the target entity's file store (and de-duplicated). After moving, post the document's accounting under that same entity using the `entity` parameter.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "file_id": { "type": "string", "description": "The file id from the upload manifest." },
+                    "to_entity": { "type": "string", "description": "Target entity name, slug, or id (from list_entities)." }
+                },
+                "required": ["file_id", "to_entity"]
+            }
+        }));
     }
     out
 }
@@ -156,6 +168,9 @@ async fn mcp_post(
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let mut args = params.get("arguments").cloned().unwrap_or(json!({}));
 
+            // The session's own company, before any per-call entity re-scoping —
+            // move_file needs it as the source the document was uploaded into.
+            let session_company = company_id;
             // Personal-entity sessions may re-scope a call to another entity
             // the user is a member of via the optional `entity` argument.
             let mut company_id = company_id;
@@ -210,6 +225,39 @@ async fn mcp_post(
                             })).collect::<Vec<_>>()
                         }),
                         Err(e) => json!({ "error": format!("{e}") }),
+                    }
+                }
+            } else if name == "move_file" {
+                if !is_personal {
+                    json!({ "error": "move_file is only available from the personal entity's session" })
+                } else {
+                    let file_id = args
+                        .get("file_id")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| Uuid::parse_str(s.trim()).ok());
+                    let to_entity = args
+                        .get("to_entity")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    match (file_id, to_entity.trim().is_empty()) {
+                        (None, _) => json!({ "error": "file_id must be a valid file id from the upload manifest" }),
+                        (_, true) => json!({ "error": "to_entity is required" }),
+                        (Some(fid), false) => match resolve_entity(&state, user_id, &to_entity).await {
+                            None => json!({ "error": format!("unknown entity '{to_entity}' or no access — use list_entities") }),
+                            Some((target_id, target_name)) => {
+                                match crate::file_store::move_company_file(
+                                    &state.pool, session_company, target_id, fid,
+                                ).await {
+                                    Ok(new_id) => {
+                                        tracing::info!(from = %session_company, to = %target_id,
+                                            file = %fid, "personal session moved file to entity");
+                                        json!({ "ok": true, "file_id": new_id, "entity": target_name })
+                                    }
+                                    Err(e) => json!({ "error": e }),
+                                }
+                            }
+                        },
                     }
                 }
             } else if name == "sync_bank" {

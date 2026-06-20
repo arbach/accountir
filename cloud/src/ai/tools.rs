@@ -284,6 +284,40 @@ pub fn schemas() -> Vec<Value> {
                 "required": ["item_id"]
             }
         }),
+        json!({
+            "name": "list_address_labels",
+            "description": "List the company's address book: wallet/counterparty addresses mapped to a name, kind, and a default account_code. ALWAYS consult this when categorizing crypto transactions — if a transaction memo contains a 0x… address listed here, post it to that counterparty's account_code. list_transactions already annotates each line with any matching counterparty.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "set_address_label",
+            "description": "Add or update an address-book entry mapping a wallet address (or any identifier) to a name, optional kind (contractor|lender|exchange|own|income|expense) and an optional default account_code. Use when you identify a new counterparty so future bookkeeping recognizes it.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "address": {"type": "string", "description": "0x… wallet address or identifier"},
+                    "name": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "account_code": {"type": "string", "description": "default account number to categorize this counterparty to, e.g. '5300'"},
+                    "note": {"type": "string"}
+                },
+                "required": ["address", "name"]
+            }
+        }),
+        json!({
+            "name": "list_documents",
+            "description": "List documents stored for this company (bank/CC statements, prior-year tax returns, K-1s, incorporation/legal docs, etc.) with their document_id, filename, category, and year. Use to find a reference document — e.g. last year's tax return or the articles of incorporation — then call read_document to read it.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "read_document",
+            "description": "Read the text of a stored document by document_id (from list_documents). PDFs are text-extracted (OCR if scanned). Use this to reference a prior-year tax return, K-1, statement, or legal/incorporation document when doing the books or preparing tax forms.",
+            "input_schema": {
+                "type": "object",
+                "properties": { "document_id": {"type": "string", "description": "id from list_documents"} },
+                "required": ["document_id"]
+            }
+        }),
     ]
 }
 
@@ -315,6 +349,10 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "balance_sheet" => balance_sheet_tool(ctx, input).await,
         "cash_flow" => cash_flow_tool(ctx, input).await,
         "list_transactions" => list_transactions_tool(ctx, input).await,
+        "list_address_labels" => list_address_labels_tool(ctx).await,
+        "set_address_label" => set_address_label_tool(ctx, input).await,
+        "list_documents" => list_documents_tool(ctx).await,
+        "read_document" => read_document_tool(ctx, input).await,
         "list_bank_connections" => list_bank_connections_tool(ctx).await,
         "navigate_to_page" => navigate_tool(input),
         // NOTE: "sync_bank" needs AppState (plaid config) and is handled by the
@@ -446,23 +484,116 @@ async fn list_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
             .map(str::to_string),
         min_cents: input.get("min_amount").and_then(|v| v.as_f64()).map(|v| (v * 100.0).round() as i64),
         max_cents: input.get("max_amount").and_then(|v| v.as_f64()).map(|v| (v * 100.0).round() as i64),
+        sort: input.get("sort").and_then(|v| v.as_str()).map(str::to_string),
     };
     let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(50).min(200) as usize;
+    // address book -> annotate any transaction whose memo names a known wallet
+    let labels = queries::list_address_labels(ctx.pool, ctx.company_id).await.unwrap_or_default();
     match queries::list_transactions(ctx.pool, ctx.company_id, &filter).await {
         Ok(lines) => json!({
             "count": lines.len().min(limit),
             "total_matching": lines.len(),
-            "transactions": lines.iter().take(limit).map(|t| json!({
-                "line_id": t.line_id,
-                "entry_id": t.entry_id,
-                "date": t.date.to_string(),
-                "memo": t.memo,
-                "account_number": t.account_number,
-                "account": t.account_name,
-                "amount": dollars(t.amount_cents),
-                "is_void": t.is_void,
+            "transactions": lines.iter().take(limit).map(|t| {
+                let mut o = json!({
+                    "line_id": t.line_id,
+                    "entry_id": t.entry_id,
+                    "date": t.date.to_string(),
+                    "memo": t.memo,
+                    "account_number": t.account_number,
+                    "account": t.account_name,
+                    "amount": dollars(t.amount_cents),
+                    "is_void": t.is_void,
+                });
+                let ml = t.memo.to_lowercase();
+                if let Some(l) = labels.iter().find(|l| !l.address.is_empty() && ml.contains(&l.address)) {
+                    o["counterparty"] = json!(l.name);
+                    if !l.account_code.is_empty() {
+                        o["suggested_account_code"] = json!(l.account_code);
+                    }
+                }
+                o
+            }).collect::<Vec<_>>(),
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn list_address_labels_tool(ctx: &ToolContext<'_>) -> Value {
+    match queries::list_address_labels(ctx.pool, ctx.company_id).await {
+        Ok(labels) => json!({
+            "count": labels.len(),
+            "labels": labels.iter().map(|l| json!({
+                "address": l.address,
+                "name": l.name,
+                "kind": l.kind,
+                "account_code": l.account_code,
+                "note": l.note,
             })).collect::<Vec<_>>(),
         }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn list_documents_tool(ctx: &ToolContext<'_>) -> Value {
+    match queries::list_company_files(ctx.pool, ctx.company_id).await {
+        Ok(files) => json!({
+            "count": files.len(),
+            "documents": files.iter().map(|f| json!({
+                "document_id": f.id,
+                "filename": f.filename,
+                "category": f.category,
+                "year": f.doc_year,
+                "size_kb": f.size_bytes / 1024,
+            })).collect::<Vec<_>>(),
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn read_document_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let Some(id) = input.get("document_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return json!({ "error": "document_id must be a UUID (from list_documents)" });
+    };
+    let file = match queries::get_company_file(ctx.pool, ctx.company_id, id).await {
+        Ok(Some(f)) => f,
+        Ok(None) => return json!({ "error": "document not found for this company" }),
+        Err(e) => return json!({ "error": format!("{e}") }),
+    };
+    let bytes = match tokio::fs::read(&file.stored_path).await {
+        Ok(b) => b,
+        Err(e) => return json!({ "error": format!("could not read stored file: {e}") }),
+    };
+    let text = if bytes.starts_with(b"%PDF") {
+        match crate::plaid::statements::extract_text_or_ocr(&bytes).await {
+            Ok(t) => t,
+            Err(e) => return json!({ "error": format!("text extraction failed: {e}") }),
+        }
+    } else {
+        String::from_utf8_lossy(&bytes).to_string()
+    };
+    let shown: String = text.chars().take(200_000).collect();
+    let truncated = shown.chars().count() < text.chars().count();
+    json!({
+        "filename": file.filename,
+        "truncated": truncated,
+        "text": shown,
+    })
+}
+
+async fn set_address_label_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let address = input.get("address").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let name = input.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if address.is_empty() || name.is_empty() {
+        return json!({ "error": "address and name are required" });
+    }
+    match queries::upsert_address_label(
+        ctx.pool, ctx.company_id, address, name,
+        input.get("kind").and_then(|v| v.as_str()).unwrap_or(""),
+        input.get("account_code").and_then(|v| v.as_str()).unwrap_or(""),
+        input.get("note").and_then(|v| v.as_str()).unwrap_or(""),
+    ).await {
+        Ok(()) => json!({ "ok": true, "address": address.to_lowercase(), "name": name }),
         Err(e) => json!({ "error": format!("{e}") }),
     }
 }

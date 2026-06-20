@@ -123,6 +123,17 @@ pub async fn send_turn(
     stream_turn(pool, user_id, company_id, text, tx).await
 }
 
+/// Stop the in-flight turn for a company (if any), without forgetting the
+/// conversation. Best-effort.
+pub async fn cancel_turn(company_id: Uuid) {
+    let client = reqwest::Client::new();
+    let _ = client
+        .post(format!("{}/cancel", agentd_url()))
+        .json(&json!({ "company_id": company_id }))
+        .send()
+        .await;
+}
+
 /// Forget the company's agent session (kills the live process and rotates the
 /// session id on next use). Best-effort.
 pub async fn reset_session(company_id: Uuid) {

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Documents{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div><h1>Documents</h1>
+    <div class="subtitle">Stored documents for this company — statements, tax documents, and other files, organized by their period/tax year. Duplicates (same file content) are skipped automatically.</div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom: var(--gap);">
+  <div class="card-title">Upload documents</div>
+  <form method="post" action="/app/documents/upload" enctype="multipart/form-data">
+    <div class="form-row" style="grid-template-columns: 180px 130px 1fr auto; align-items: end;">
+      <label class="field"><span class="label-text">Category</span>
+        <select name="category">
+          <option value="statement">Bank/CC statement</option>
+          <option value="tax">Tax document</option>
+          <option value="other" selected>Other</option>
+        </select></label>
+      <label class="field"><span class="label-text">Year (optional)</span>
+        <input type="number" name="doc_year" min="2000" max="2099" placeholder="auto"></label>
+      <label class="field"><span class="label-text">Files</span>
+        <input type="file" name="file" multiple required></label>
+      <div style="padding-bottom:12px;"><button type="submit" class="btn btn-primary">Upload</button></div>
+    </div>
+    <div class="muted" style="font-size:12px;">Select multiple files. If you leave Year blank I'll detect it from the filename; you can correct any year below. Identical content already stored for this company is de-duplicated.</div>
+  </form>
+</div>
+
+<div class="card" style="margin-bottom: var(--gap);">
+  <form method="get" action="/app/documents" class="filter-bar" style="display:flex; gap:12px; align-items:end; flex-wrap:wrap;"
+        onchange="if(window.saveFilters)saveFilters(this);">
+    <label class="field"><span class="label-text">Year</span>
+      <select name="year">
+        <option value="">All years</option>
+        {% for y in all_years %}
+        <option value="{{ y }}" {% if selected_year == y.as_str() %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="field"><span class="label-text">Category</span>
+      <select name="category">
+        <option value="">All categories</option>
+        {% for c in all_categories %}
+        <option value="{{ c }}" {% if selected_category == c.as_str() %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="field" style="flex:1; min-width:180px;"><span class="label-text">Search filename</span>
+      <input type="text" name="q" value="{{ search }}" placeholder="text in filename"></label>
+    <div><button type="submit" class="btn btn-primary">Apply</button>
+      <a href="/app/documents" class="btn btn-ghost">Clear</a></div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-title">{{ total }} document{% if total != 1 %}s{% endif %}{% if !selected_year.is_empty() || !selected_category.is_empty() || !search.is_empty() %} (filtered){% endif %}</div>
+  {% if groups.is_empty() %}
+  <p class="muted" style="font-size:13px;">No documents stored yet. Upload statements or tax documents above.</p>
+  {% else %}
+  {% for g in groups %}
+  <div style="margin-top:18px;">
+    <div style="font-weight:600; font-size:13px; color:var(--muted); border-bottom:1px solid var(--border); padding-bottom:6px; margin-bottom:6px;">{{ g.label }}</div>
+    <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>File</th>
+        <th style="width:130px">Category</th>
+        <th class="num" style="width:100px">Size</th>
+        <th style="width:120px">Year</th>
+        <th style="width:140px">Uploaded</th>
+        <th style="width:90px"></th>
+      </tr></thead>
+      <tbody>
+      {% for f in g.files %}
+        <tr>
+          <td><a href="/app/documents/{{ f.id }}/download" target="_blank">{{ f.filename }}</a></td>
+          <td><span class="badge">{{ f.category }}</span></td>
+          <td class="num">{{ f.size_bytes / 1024 }} KB</td>
+          <td>
+            <form method="post" action="/app/documents/{{ f.id }}/year" style="display:flex; gap:4px;">
+              <input type="number" name="doc_year" min="2000" max="2099"
+                {% match f.doc_year %}{% when Some with (y) %}value="{{ y }}"{% when None %}placeholder="—"{% endmatch %}
+                style="width:64px; padding:2px 4px; font-size:12px;">
+              <button class="btn btn-ghost" style="padding:2px 8px; font-size:12px;">Set</button>
+            </form>
+          </td>
+          <td class="muted" style="font-size:12px;">{{ f.uploaded_at }}</td>
+          <td>
+            <form method="post" action="/app/documents/{{ f.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this document?')">
+              <button class="btn btn-danger" style="padding:2px 10px; font-size:12px;">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}

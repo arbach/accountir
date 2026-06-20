@@ -1,5 +1,7 @@
 use axum::{
+    body::Bytes,
     extract::State,
+    http::{HeaderMap, StatusCode},
     response::Html,
     routing::{get, post},
     Json, Router,
@@ -14,7 +16,7 @@ use crate::{
     auth::AuthenticatedUser,
     error::{AppError, AppResult},
     http::AppState,
-    plaid::{client::PlaidClient, crypto::TokenCipher, PlaidError},
+    plaid::{client::PlaidClient, crypto::TokenCipher, webhook_verify, PlaidError},
 };
 
 pub fn router() -> Router<AppState> {
@@ -35,17 +37,34 @@ pub fn router() -> Router<AppState> {
 // Observability + OAuth return
 // ---------------------------------------------------------------------------
 
-/// Plaid posts item/transaction updates here. Logs and acks; never mutates.
-async fn webhook(body: String) -> Json<Value> {
-    let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+/// Plaid posts item/transaction updates here. This endpoint is SSO-bypassed at
+/// the edge, so it MUST authenticate Plaid itself: we verify the
+/// `Plaid-Verification` JWS over the raw body before trusting any field. Logs
+/// and acks; never mutates.
+async fn webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> (StatusCode, Json<Value>) {
+    let client = PlaidClient::new(state.config.plaid.clone());
+    let verification = headers.get("plaid-verification").and_then(|h| h.to_str().ok());
+    if let Err(e) = webhook_verify::verify(&client, verification, &body).await {
+        tracing::warn!(error = %e, "rejected unverified plaid webhook");
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "invalid signature" })),
+        );
+    }
+
+    // Verified: safe to parse and log identifying fields (not the whole body).
+    let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     tracing::info!(
         webhook_type = v.get("webhook_type").and_then(|x| x.as_str()).unwrap_or(""),
         webhook_code = v.get("webhook_code").and_then(|x| x.as_str()).unwrap_or(""),
         item_id = v.get("item_id").and_then(|x| x.as_str()).unwrap_or(""),
-        payload = %body,
-        "plaid webhook received"
+        "verified plaid webhook received"
     );
-    Json(serde_json::json!({ "status": "ok" }))
+    (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
 }
 
 /// Browser reports Plaid Link onExit/onEvent here so failures (e.g. Chase OAuth)

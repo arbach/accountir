@@ -51,14 +51,14 @@ You manage the books through your `accounting` tools (chart of accounts, journal
 
 TAX FILING — when the user asks you to prepare or file taxes, work the pipeline on /app/tax IN ORDER, telling the user which step you're on:
 1. Profile: get_tax_profile; if missing or incomplete, ask the user (entity type, legal name, EIN, mailing address) and set_tax_profile. Never invent an EIN.
-2. Books review: run the ACCOUNTING PROTOCOL for the tax year. Do not fill forms from books with unresolved transfers/duplicates.
+2. Books review: run the ACCOUNTING PROTOCOL for the tax year. Do not fill forms from books with unresolved transfers/duplicates. REFERENCE PRIOR YEAR: call list_documents and read_document to read last year's filed tax return (and K-1s, depreciation schedules, legal/incorporation docs) — carry forward depreciation, basis, entity details (EIN, entity type, ownership %), and use the prior return's structure as the template for this year. Documents are filed per company in its Documents tab.
 3. Determine + pull forms: decide which IRS forms the entity needs (individual → f1040 plus the schedules below; schedule_c → f1040sc with the 1040; s_corp → f1120s; partnership → f1065; contractors paid ≥ $600 → f1099nec per payee; depreciation → f4562). Verify anything uncertain with WebSearch on irs.gov. fetch_tax_form pulls each official PDF.
 4. Complete: map ledger numbers to the form's lines and fill_tax_form with exact field names from get_tax_form_fields. Field names are cryptic (f1_07[0] etc.) — match them to line numbers by their order and the form's layout; WebSearch the form instructions when unsure. Show the user a line-by-line summary of what you entered.
 5. Approve: tell the user to open the PDF (review_url) and click Approve on /app/tax. You cannot skip this — mail_tax_form rejects unapproved forms.
 6. Mail: verify the correct IRS service-center address for the form and the company's state on irs.gov (WebSearch), restate the full destination and certified option to the user, get an explicit yes, then mail_tax_form. Report the Lob id, tracking number, and expected delivery date.
 Caveats: you prepare; the user is the filer. Recommend they keep copies (the PDFs stay on /app/tax). Flag anything that looks like it needs a CPA (multi-state, payroll, amended returns).
 
-PERSONAL ENTITY — if your tools expose list_entities, this session belongs to the user's PERSONAL entity and you can manage ALL their entities: pass entity:"<name>" on any tool to read or change another entity's books, reports, or tax forms. Always state which entity you're acting on, and never mix one entity's numbers into another's ledger. When preparing the user's PERSONAL taxes (Form 1040), consolidate every entity into the personal return: run each entity's year-end numbers (income_statement with entity:...), and include the flow-through amounts where they belong — s_corp/partnership entities produce K-1s (Schedule E part II; pull f1120ss-k1/f1065sk1 as needed), single-member LLCs / sole props go on Schedule C, and add Schedule SE for self-employment tax when applicable. Present a consolidation summary (entity → form → amount) before filling the 1040.
+PERSONAL ENTITY — if your tools expose list_entities, this session belongs to the user's PERSONAL entity and you can manage ALL their entities: pass entity:"<name>" on any tool to read or change another entity's books, reports, or tax forms. Always state which entity you're acting on, and never mix one entity's numbers into another's ledger. DOCUMENT ROUTING: when the user drops a file into this session, the upload manifest lists each retained file's file_id. Identify which entity the document belongs to (from its contents — account holder, EIN, wallet, business name). If it belongs to another entity, call move_file with that file_id and to_entity to file the ORIGINAL document under that entity, THEN post its accounting there with entity:"<name>". Before posting into any entity, first survey that entity's existing books (chart + transaction counts with entity:...) so you build on its prior work and never duplicate or overwrite another agent's entries; record new counterparties/wallets with set_address_label so the entity's own agent recognizes them later. When preparing the user's PERSONAL taxes (Form 1040), consolidate every entity into the personal return: run each entity's year-end numbers (income_statement with entity:...), and include the flow-through amounts where they belong — s_corp/partnership entities produce K-1s (Schedule E part II; pull f1120ss-k1/f1065sk1 as needed), single-member LLCs / sole props go on Schedule C, and add Schedule SE for self-employment tax when applicable. Present a consolidation summary (entity → form → amount) before filling the 1040.
 
 ACCOUNTING PROTOCOL — follow whenever the user asks you to DO or REVIEW accounting (classification, categorization, reconciliation, cleanup). Do NOT run these steps unprompted at the start of an ordinary chat.
 1. Survey first. Before any classification, fetch the full chart of accounts and transaction counts, and open with a summary: "X accounts, Y transactions, covering <date range>." The user must never discover a missing account mid-session.
@@ -70,7 +70,8 @@ ACCOUNTING PROTOCOL — follow whenever the user asks you to DO or REVIEW accoun
 7. Prefer void over reversal. Use the void_entry tool to undo a wrong entry (unvoid_entry restores) instead of posting manual reversing entries.
 8. Reconcile counts after imports. After a statement or bank import, compare the ledger's transaction count for that account/period against the statement's count and report any gap before moving on.
 9. Flag possible duplicates. The same amount appearing in two accounts within ~3 days is either one transfer or a double-import — ask the user which, before it distorts the books.
-10. Reconcile across sources. When the user provides an external export (Xero, QuickBooks, bank CSV), compare its transaction count to the ledger's for the same period and surface the difference ("Xero has 192, ledger has 176 — 16 unaccounted") before classifying anything."#;
+10. Reconcile across sources. When the user provides an external export (Xero, QuickBooks, bank CSV), compare its transaction count to the ledger's for the same period and surface the difference ("Xero has 192, ledger has 176 — 16 unaccounted") before classifying anything.
+11. Use the address book for wallets. Crypto/transfer memos contain 0x… wallet addresses. ALWAYS call list_address_labels (or read the `counterparty`/`suggested_account_code` fields list_transactions already adds) before categorizing them — post a labeled address to its account_code rather than guessing or leaving it Uncategorized. When you identify a new counterparty, record it with set_address_label so future bookkeeping recognizes it. Treat transfers between the user's OWN labeled wallets as internal (never P&L)."#;
 
 struct AgentProc {
     child: Child,
@@ -94,6 +95,28 @@ struct Daemon {
     pool: PgPool,
     cfg: Cfg,
     agents: Mutex<HashMap<Uuid, Arc<Mutex<Option<AgentProc>>>>>,
+    // Per-company cancel signal: firing it makes the in-flight turn's read loop
+    // abort, kill the claude child, and end the stream. Lives outside the slot
+    // mutex (which run_turn holds for the whole turn) so /cancel can reach it.
+    cancels: Mutex<HashMap<Uuid, Arc<tokio::sync::Notify>>>,
+}
+
+impl Daemon {
+    /// Register a FRESH cancel signal for this turn (replaces any prior one).
+    async fn register_cancel(&self, company_id: Uuid) -> Arc<tokio::sync::Notify> {
+        let n = Arc::new(tokio::sync::Notify::new());
+        self.cancels.lock().await.insert(company_id, n.clone());
+        n
+    }
+    /// Fire the current turn's cancel signal, if one is registered.
+    async fn fire_cancel(&self, company_id: Uuid) -> bool {
+        if let Some(n) = self.cancels.lock().await.get(&company_id) {
+            n.notify_waiters();
+            true
+        } else {
+            false
+        }
+    }
 }
 
 fn random_token() -> String {
@@ -253,6 +276,9 @@ async fn run_turn(
         }
     }
 
+    // Fresh per-turn cancel signal; /cancel fires it to stop this turn.
+    let cancel = d.register_cancel(company_id).await;
+
     let mut forwarded = 0usize;
     let mut respawned = false;
     let mut session_reset = false;
@@ -263,10 +289,29 @@ async fn run_turn(
     let mut first_event_deadline =
         tokio::time::Instant::now() + Duration::from_secs(d.cfg.first_event_timeout_secs);
     loop {
-        let proc = slot.as_mut().unwrap();
         let eff_deadline =
             if forwarded == 0 { first_event_deadline.min(deadline) } else { deadline };
-        match tokio::time::timeout_at(eff_deadline, proc.stdout.next_line()).await {
+        // Race the next line against the cancel signal. None == cancelled.
+        let read_res = {
+            let proc = slot.as_mut().unwrap();
+            tokio::select! {
+                biased;
+                _ = cancel.notified() => None,
+                r = tokio::time::timeout_at(eff_deadline, proc.stdout.next_line()) => Some(r),
+            }
+        };
+        let read_res = match read_res {
+            None => {
+                tracing::info!(company = %company_id, "turn cancelled by user");
+                *slot = None; // kill_on_drop reaps the claude child; next turn --resumes
+                let _ = tx
+                    .send(Ok(Bytes::from(json!({ "type": "cancelled" }).to_string() + "\n")))
+                    .await;
+                return Ok(());
+            }
+            Some(r) => r,
+        };
+        match read_res {
             Err(_) => {
                 if forwarded == 0 && !respawned && tokio::time::Instant::now() < deadline {
                     tracing::warn!(company = %company_id,
@@ -498,6 +543,20 @@ async fn reset(State(d): State<Arc<Daemon>>, Json(req): Json<ResetReq>) -> Json<
     Json(json!({ "ok": true }))
 }
 
+#[derive(Deserialize)]
+struct CancelReq {
+    company_id: Uuid,
+}
+
+/// Stop the in-flight turn for a company (if any). Fires the per-turn cancel
+/// signal; the turn's read loop aborts, kills the claude child, and ends the
+/// stream. The session resumes cleanly on the next turn.
+async fn cancel(State(d): State<Arc<Daemon>>, Json(req): Json<CancelReq>) -> Json<Value> {
+    let fired = d.fire_cancel(req.company_id).await;
+    tracing::info!(company = %req.company_id, fired, "cancel requested");
+    Json(json!({ "ok": true, "cancelled": fired }))
+}
+
 async fn health() -> &'static str {
     "ok"
 }
@@ -563,12 +622,14 @@ async fn main() -> anyhow::Result<()> {
         pool,
         cfg,
         agents: Mutex::new(HashMap::new()),
+        cancels: Mutex::new(HashMap::new()),
     });
     tokio::spawn(reaper(d.clone()));
 
     let bind = env_or("AGENTD_BIND", "127.0.0.1:9878");
     let app = Router::new()
         .route("/turn", post(turn))
+        .route("/cancel", post(cancel))
         .route("/reset", post(reset))
         .route("/oneshot", post(oneshot))
         .route("/health", get(health))

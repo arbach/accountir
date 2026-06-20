@@ -333,6 +333,9 @@
       <a href="/app/entries">Journal</a>
       <a href="/app/accounts">Accounts</a>
       <a href="/app/banks">Banks</a>
+      <a href="/app/address-book">Address Book</a>
+      <a href="/app/documents">Documents</a>
+      <a href="/app/wise">Wise</a>
       <a href="/app/reports">Reports</a>
       <a href="/app/tax">Tax</a>
       <a href="/app/chat">AI Chat</a>
@@ -532,12 +535,17 @@
     #aiw-msgs .aiw-role { font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
       color: var(--text-3, #888); margin: 10px 0 2px; }
     #aiw-msgs .aiw-body { white-space: pre-wrap; }
+    /* The user's own messages: accent bubble, right-aligned, to stand apart. */
+    #aiw-msgs .aiw-role.user { color: var(--accent, #2563eb); text-align: right; }
+    #aiw-msgs .aiw-body.user { background: var(--accent, #2563eb); color: #fff;
+      padding: 6px 10px; border-radius: 12px 12px 2px 12px; margin-left: auto; max-width: 85%;
+      width: fit-content; }
     #aiw-form { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--border, #ddd); }
     #aiw-form input { flex: 1; font-size: 13px; }
     #aiw-panel.aiw-drag { outline: 2px dashed var(--accent, #2563eb); outline-offset: -6px; }
   </style>
   <button id="aiw-fab" title="AI accountant">&#128172;</button>
-  <div id="aiw-panel" role="dialog" aria-label="AI accountant" data-company="{{ nav.active_company_name }}">
+  <div id="aiw-panel" role="dialog" aria-label="AI accountant" data-company="{{ nav.active_company_name }}" data-company-id="{{ nav.active_company_id }}">
     <div id="aiw-head"><span>AI accountant &middot; {{ nav.active_company_name }}</span>
       <span><a href="/app/chat" style="font-weight:400;font-size:12px;">Full view</a>
       <button id="aiw-close" class="btn btn-ghost" style="padding:2px 8px;">&times;</button></span></div>
@@ -546,6 +554,7 @@
       <input type="file" id="aiw-file" accept=".pdf,.csv,.txt,.md,.json" multiple style="display:none;">
       <button type="button" class="btn btn-ghost" id="aiw-attach" title="Upload a file for the AI (PDF, CSV, text)" style="padding:4px 8px;">&#128206;</button>
       <input id="aiw-input" type="text" placeholder="Ask about your books&hellip;" autocomplete="off">
+      <button type="button" class="btn btn-danger" id="aiw-stop" style="display:none;" title="Stop the agent">&#9209;</button>
       <button type="submit" class="btn btn-primary" id="aiw-send">Send</button></form>
   </div>
   <script>
@@ -554,17 +563,34 @@
     var msgs = document.getElementById('aiw-msgs'), form = document.getElementById('aiw-form');
     var input = document.getElementById('aiw-input'), send = document.getElementById('aiw-send');
     var COMPANY = panel.getAttribute('data-company') || '';
+    // The company this tab rendered with. Sent on every chat request so this
+    // tab keeps talking to its OWN company's session even if another tab in the
+    // same browser switches the shared active-company cookie.
+    var COMPANY_ID = panel.getAttribute('data-company-id') || '';
+    function withCompany(url) {
+      if (!COMPANY_ID) { return url; }
+      return url + (url.indexOf('?') < 0 ? '?' : '&') + 'company=' + encodeURIComponent(COMPANY_ID);
+    }
     var loaded = false;
     var S = window.sessionStorage;
     function sget(k) { try { return S.getItem(k); } catch (_) { return null; } }
     function sset(k, v) { try { S.setItem(k, v); } catch (_) {} }
     function sdel(k) { try { S.removeItem(k); } catch (_) {} }
 
+    // Auto-scroll only while the user is parked at the bottom. Once they scroll
+    // up (e.g. to read while the agent is thinking) we stop yanking them down.
+    var pinned = true;
+    msgs.addEventListener('scroll', function () {
+      pinned = (msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight) < 80;
+    });
+    function stick() { if (pinned) { msgs.scrollTop = msgs.scrollHeight; } }
+
     function line(role, body) {
-      var r = document.createElement('div'); r.className = 'aiw-role'; r.textContent = role;
-      var b = document.createElement('div'); b.className = 'aiw-body';
+      var isUser = role === 'user';
+      var r = document.createElement('div'); r.className = 'aiw-role' + (isUser ? ' user' : ''); r.textContent = role;
+      var b = document.createElement('div'); b.className = 'aiw-body' + (isUser ? ' user' : '');
       if (role === 'assistant') { mdSet(b, body || ''); } else { b.textContent = body || ''; }
-      msgs.appendChild(r); msgs.appendChild(b); msgs.scrollTop = msgs.scrollHeight; return b;
+      msgs.appendChild(r); msgs.appendChild(b); stick(); return b;
     }
     function renderLines(lines) {
       msgs.innerHTML = '';
@@ -573,7 +599,7 @@
     }
     async function loadHistory() {
       try {
-        var r = await fetch('/app/chat/history'); var d = await r.json();
+        var r = await fetch(withCompany('/app/chat/history')); var d = await r.json();
         renderLines(d.lines);
       } catch (e) { msgs.innerHTML = ''; line('assistant', '(could not load history)'); }
     }
@@ -591,17 +617,50 @@
     // Survive page switches: a turn keeps running server-side after navigation,
     // so remember the question and poll history on the next page until the
     // assistant's reply lands.
-    function setPending(q) { sset('aiwPending', JSON.stringify({ q: q, c: COMPANY, ts: Date.now() })); }
+    function setPending(q) { sset('aiwPending', JSON.stringify({ q: q, c: COMPANY_ID, ts: Date.now() })); }
     function getPending() {
       try {
         var p = JSON.parse(sget('aiwPending') || 'null');
-        if (p && p.c === COMPANY && Date.now() - p.ts < 11 * 60 * 1000) { return p; }
+        if (p && p.c === COMPANY_ID && Date.now() - p.ts < 11 * 60 * 1000) { return p; }
       } catch (_) {}
       sdel('aiwPending'); return null;
     }
+    var busy = false, aiwAbort = null, stopped = false, aiwQueue = [];
+    var stopBtn = document.getElementById('aiw-stop');
     function setBusy(on) {
-      input.disabled = on; send.disabled = on; send.textContent = on ? '\u2026' : 'Send';
-      if (!on) { input.focus(); }
+      busy = on;
+      // Input stays enabled while busy so the user can QUEUE follow-ups.
+      input.disabled = false;
+      send.disabled = false; send.textContent = on ? '\u2026' : 'Send';
+      stopBtn.style.display = on ? '' : 'none';
+      if (!on) { input.focus(); processQueue(); }
+    }
+    function processQueue() {
+      if (busy || !aiwQueue.length) { return; }
+      var item = aiwQueue.shift();
+      if (item.el && item.el.parentNode) { msgs.removeChild(item.el); }
+      startStreamTurn(item.text);
+    }
+    function enqueue(text) {
+      var el = document.createElement('div');
+      el.className = 'aiw-role'; el.style.opacity = '0.6';
+      el.textContent = '\u23f3 queued: ' + text;
+      msgs.appendChild(el); stick();
+      aiwQueue.push({ text: text, el: el });
+    }
+    function stopTurn() {
+      stopped = true;
+      if (aiwAbort) { try { aiwAbort.abort(); } catch (_) {} }
+      fetch(withCompany('/app/chat/stop'), { method: 'POST' }).catch(function () {});
+    }
+    stopBtn.addEventListener('click', stopTurn);
+    // Run the streaming chat turn for a piece of text (used by submit + queue).
+    function startStreamTurn(text) {
+      runTurn(text, function (signal) {
+        return fetch(withCompany('/app/chat/stream'), { method: 'POST', signal: signal,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'message=' + encodeURIComponent(text) });
+      });
     }
     async function pollForAnswer(q, indicator) {
       setBusy(true);
@@ -609,7 +668,7 @@
       while (Date.now() < deadline) {
         await new Promise(function (res) { setTimeout(res, 2500); });
         try {
-          var r = await fetch('/app/chat/history'); var d = await r.json();
+          var r = await fetch(withCompany('/app/chat/history')); var d = await r.json();
           var lines = d.lines || []; var li = -1;
           for (var i = 0; i < lines.length; i++) {
             if (lines[i].role === 'user' && lines[i].body === q) { li = i; }
@@ -630,7 +689,7 @@
         var p = getPending();
         if (p) {
           var ind = line('assistant', '');
-          ind.appendChild(typingEl()); msgs.scrollTop = msgs.scrollHeight;
+          ind.appendChild(typingEl()); stick();
           pollForAnswer(p.q, ind);
         }
       });
@@ -642,31 +701,34 @@
     // history-polling if the connection drops. `doFetch` returns the response
     // (message stream or file upload \u2014 both speak the same SSE).
     async function runTurn(displayText, doFetch) {
+      stopped = false; aiwAbort = new AbortController();
       setBusy(true);
+      pinned = true; // the user just sent \u2014 jump to the bottom for this turn
       line('user', displayText);
       var live = line('assistant', '');
       var typing = typingEl();
-      msgs.appendChild(typing); msgs.scrollTop = msgs.scrollHeight;
+      msgs.appendChild(typing); stick();
       var pendingNav = null;
       setPending(displayText);
       function handle(ev) {
         if (ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
             && ev.event.delta && ev.event.delta.type === 'text_delta') {
-          mdAppend(live, ev.event.delta.text); msgs.scrollTop = msgs.scrollHeight;
+          mdAppend(live, ev.event.delta.text); stick();
         } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
           ev.message.content.forEach(function (blk) {
             if (blk.type === 'text' && blk.text) { mdSet(live, blk.text); live = line('assistant', ''); }
             else if (blk.type === 'tool_use') {
+              // Internal bookkeeping operation \u2014 capture navigation, show nothing.
               if ((blk.name || '').indexOf('navigate_to_page') >= 0 && blk.input && blk.input.page) { pendingNav = blk.input.page; }
-              line('assistant \u00b7 tool (' + (blk.name || '?') + ')', ''); live = line('assistant', '');
             }
           });
         } else if (ev.type === 'upload_progress') { live.textContent = ev.note || '';
+        } else if (ev.type === 'cancelled') { live.textContent = '(stopped)';
         } else if (ev.type === 'daemon_error') { live.textContent = '(agent error: ' + (ev.error || '?') + ')'; }
-        msgs.appendChild(typing); msgs.scrollTop = msgs.scrollHeight;
+        msgs.appendChild(typing); stick();
       }
       try {
-        var resp = await doFetch();
+        var resp = await doFetch(aiwAbort.signal);
         if (!resp.ok) { var emsg = ''; try { emsg = await resp.text(); } catch (_) {} throw new Error('HTTP ' + resp.status + (emsg ? ': ' + emsg.slice(0, 300) : '')); }
         if (!resp.body) throw new Error('HTTP ' + resp.status);
         var reader = resp.body.getReader(); var dec = new TextDecoder(); var buf = '';
@@ -684,11 +746,17 @@
         if (!live.textContent && !(live._md || '').trim()) { live.previousSibling && msgs.removeChild(live.previousSibling); msgs.removeChild(live); }
         setBusy(false);
       } catch (err) {
+        typing.remove();
+        if (stopped) {
+          // User pressed Stop: end cleanly, don't poll for an answer.
+          if (!live.textContent && !(live._md || '').trim()) { live.textContent = '(stopped)'; }
+          sdel('aiwPending'); setBusy(false);
+          return;
+        }
         // Connection dropped but the turn keeps running server-side; fall back
         // to polling history for the answer.
         live.textContent = '(connection lost \u2014 waiting for the answer\u2026)';
         live.appendChild(typingEl());
-        typing.remove();
         pollForAnswer(displayText, live);
       }
       if (pendingNav) { setTimeout(function () { window.location = pendingNav; }, 400); }
@@ -698,11 +766,8 @@
       e.preventDefault();
       var text = input.value.trim(); if (!text) return;
       input.value = ''; sdel('aiwDraft');
-      runTurn(text, function () {
-        return fetch('/app/chat/stream', { method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'message=' + encodeURIComponent(text) });
-      });
+      if (busy) { enqueue(text); return; } // queue follow-ups while the agent works
+      startStreamTurn(text);
     });
 
     // Let pages drive the assistant (e.g. the Tax "Next" button): open the
@@ -710,8 +775,9 @@
     window.aiwAsk = async function (text) {
       panel.classList.add('open'); sset('aiwOpen', '1');
       if (!loaded) { loaded = true; await loadHistory(); }
-      runTurn(text, function () {
-        return fetch('/app/chat/stream', { method: 'POST',
+      if (busy) { enqueue(text); return; }
+      runTurn(text, function (signal) {
+        return fetch(withCompany('/app/chat/stream'), { method: 'POST', signal: signal,
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: 'message=' + encodeURIComponent(text) });
       });
@@ -722,8 +788,8 @@
       var fd = new FormData();
       fs.forEach(function (f) { fd.append('file', f, f.name); });
       var names = fs.map(function (f) { return f.name; }).join(', ');
-      runTurn('\ud83d\udcce Uploaded: ' + names, function () {
-        return fetch('/app/chat/upload', { method: 'POST', body: fd });
+      runTurn('\ud83d\udcce Uploaded: ' + names, function (signal) {
+        return fetch(withCompany('/app/chat/upload'), { method: 'POST', body: fd, signal: signal });
       });
     }
     var fileInput = document.getElementById('aiw-file');

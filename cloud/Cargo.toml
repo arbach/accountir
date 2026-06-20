@@ -60,6 +60,8 @@ sha2 = "0.10"
 hex = "0.4"
 argon2 = "0.5"
 rand = "0.8"
+# Plaid webhook JWT (JWS, ES256) verification
+jsonwebtoken = "9"
 
 # Errors
 thiserror = "2"

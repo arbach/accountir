@@ -44,9 +44,22 @@ pub async fn append_event<'a>(
         .map_err(|e| StoreError::Payload(e.to_string()))?;
     let event_type = event.event_type();
 
-    // Per-tenant monotonic sequence. Locks via UPDATE/INSERT pattern is overkill;
-    // SELECT MAX inside a transaction is fine because we're in REPEATABLE READ-equivalent
-    // territory under the SET LOCAL company_id. UNIQUE(company_id, company_seq_id) guards.
+    // Serialize appends PER COMPANY so concurrent writers can't both read the
+    // same MAX(company_seq_id) and collide on insert. This matters now that the
+    // owner's personal session can post into another entity (via the MCP
+    // `entity` param) at the same moment that entity's own agent is posting:
+    // without this lock, under READ COMMITTED both transactions compute the same
+    // next_seq, the second hits the UNIQUE(company_id, company_seq_id) guard, and
+    // its write is lost with a conflict error. A transaction-scoped advisory lock
+    // keyed on the company makes the read-then-insert atomic per tenant while
+    // still allowing full parallelism ACROSS companies. Auto-released at tx end.
+    sqlx::query("SELECT pg_advisory_xact_lock(727, hashtext($1))")
+        .bind(company_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+
+    // Per-tenant monotonic sequence. Safe under the advisory lock above:
+    // UNIQUE(company_id, company_seq_id) remains the backstop guard.
     let next_seq: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(company_seq_id), 0) + 1 FROM events WHERE company_id = $1",
     )

@@ -683,6 +683,9 @@ pub struct TransactionLine {
     pub entry_id: Uuid,
     pub date: NaiveDate,
     pub memo: String,
+    /// `memo` with wallet addresses shortened to 0x123…last5 and, when known,
+    /// prefixed with the address-book name. Set by the web handler; defaults to memo.
+    pub memo_display: String,
     pub reference: Option<String>,
     pub account_id: Uuid,
     pub account_number: String,
@@ -719,6 +722,8 @@ pub struct TransactionFilter {
     /// Absolute-amount bounds, in cents.
     pub min_cents: Option<i64>,
     pub max_cents: Option<i64>,
+    /// Sort order: "date_desc" (default), "date_asc", "amount_desc", "amount_asc".
+    pub sort: Option<String>,
 }
 
 pub async fn list_transactions(
@@ -730,10 +735,18 @@ pub async fn list_transactions(
     let mut tx = conn.begin().await?;
     set_tenant(&mut tx, company_id).await?;
 
+    // Validated against a fixed allow-list, so it's safe to interpolate into SQL.
+    let order_by = match filter.sort.as_deref() {
+        Some("date_asc") => "je.date ASC, je.id ASC, jl.amount DESC",
+        Some("amount_desc") => "abs(jl.amount) DESC, je.date DESC, je.id DESC",
+        Some("amount_asc") => "abs(jl.amount) ASC, je.date DESC, je.id DESC",
+        _ => "je.date DESC, je.id DESC, jl.amount DESC",
+    };
+
     // When no specific account is picked we show only the asset/liability "bank side"
     // of each entry — otherwise every Plaid transaction shows up twice (bank line +
     // Uncategorized counterpart). Filtering by a specific account always wins.
-    let rows = sqlx::query(
+    let rows = sqlx::query(&format!(
         r#"
         SELECT jl.id, je.id, je.date, je.memo, je.reference,
                a.id, a.account_number, a.name,
@@ -754,10 +767,10 @@ pub async fn list_transactions(
                OR ($7 = 'credit' AND jl.amount < 0))
           AND ($8::bigint IS NULL OR abs(jl.amount) >= $8)
           AND ($9::bigint IS NULL OR abs(jl.amount) <= $9)
-        ORDER BY je.date DESC, je.id DESC, jl.amount DESC
+        ORDER BY {order_by}
         LIMIT 500
         "#,
-    )
+    ))
     .bind(filter.start)
     .bind(filter.end)
     .bind(filter.account_id)
@@ -778,6 +791,7 @@ pub async fn list_transactions(
             entry_id: r.get(1),
             date: r.get(2),
             memo: r.get::<Option<String>, _>(3).unwrap_or_default(),
+            memo_display: r.get::<Option<String>, _>(3).unwrap_or_default(),
             reference: r.get(4),
             account_id: r.get(5),
             account_number: r.get(6),
@@ -1268,6 +1282,295 @@ pub struct CreateCustomerInput {
     pub country: String,
     pub default_terms: String,
     pub notes: Option<String>,
+}
+
+// --- Company file store (with content de-duplication) ----------------------
+
+pub struct CompanyFileRow {
+    pub id: Uuid,
+    pub category: String,
+    pub filename: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub uploaded_at: String,
+    pub doc_year: Option<i32>,
+}
+
+/// Files ordered for the Documents view: newest period/tax year first, unknown
+/// years last, then by category and recency within a year.
+pub async fn list_company_files(pool: &PgPool, company_id: Uuid) -> AppResult<Vec<CompanyFileRow>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let rows = sqlx::query(
+        "SELECT id, category, filename, content_type, size_bytes,
+                to_char(uploaded_at, 'YYYY-MM-DD HH24:MI'), doc_year
+         FROM company_files WHERE company_id = $1
+         ORDER BY doc_year DESC NULLS LAST, category ASC, uploaded_at DESC",
+    )
+    .bind(company_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| CompanyFileRow {
+            id: r.get(0),
+            category: r.get(1),
+            filename: r.get(2),
+            content_type: r.get(3),
+            size_bytes: r.get(4),
+            uploaded_at: r.get(5),
+            doc_year: r.get(6),
+        })
+        .collect())
+}
+
+/// Set (or clear, with None) the period/tax year a document pertains to.
+pub async fn update_company_file_year(
+    pool: &PgPool,
+    company_id: Uuid,
+    id: Uuid,
+    doc_year: Option<i32>,
+) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query("UPDATE company_files SET doc_year = $3 WHERE company_id = $1 AND id = $2")
+        .bind(company_id)
+        .bind(id)
+        .bind(doc_year)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// True if a file with this content hash already exists for the company.
+pub async fn company_file_exists(pool: &PgPool, company_id: Uuid, sha256: &str) -> AppResult<bool> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM company_files WHERE company_id = $1 AND sha256 = $2")
+            .bind(company_id)
+            .bind(sha256)
+            .fetch_optional(&mut *tx)
+            .await?;
+    tx.commit().await?;
+    Ok(row.is_some())
+}
+
+#[allow(clippy::too_many_arguments)]
+/// Insert a file row, returning its id. On content duplicate (same company +
+/// sha256) the existing row's id is returned and nothing is written.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_company_file(
+    pool: &PgPool,
+    company_id: Uuid,
+    category: &str,
+    filename: &str,
+    content_type: &str,
+    size_bytes: i64,
+    sha256: &str,
+    stored_path: &str,
+    doc_year: Option<i32>,
+) -> AppResult<Option<Uuid>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    // ON CONFLICT: a concurrent duplicate is silently ignored (dedup). Touch the
+    // category on conflict so the existing row's id comes back via RETURNING.
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "INSERT INTO company_files
+            (company_id, category, filename, content_type, size_bytes, sha256, stored_path, doc_year)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (company_id, sha256) DO UPDATE SET sha256 = EXCLUDED.sha256
+         RETURNING id",
+    )
+    .bind(company_id)
+    .bind(category)
+    .bind(filename)
+    .bind(content_type)
+    .bind(size_bytes)
+    .bind(sha256)
+    .bind(stored_path)
+    .bind(doc_year)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(row.map(|(id,)| id))
+}
+
+/// Full file record, used when copying a file between entities.
+pub struct StoredFileFull {
+    pub category: String,
+    pub filename: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub sha256: String,
+    pub stored_path: String,
+    pub doc_year: Option<i32>,
+}
+
+pub async fn get_company_file_full(
+    pool: &PgPool,
+    company_id: Uuid,
+    id: Uuid,
+) -> AppResult<Option<StoredFileFull>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let row: Option<(String, String, String, i64, String, String, Option<i32>)> = sqlx::query_as(
+        "SELECT category, filename, content_type, size_bytes, sha256, stored_path, doc_year
+         FROM company_files WHERE company_id = $1 AND id = $2",
+    )
+    .bind(company_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(row.map(
+        |(category, filename, content_type, size_bytes, sha256, stored_path, doc_year)| {
+            StoredFileFull {
+                category, filename, content_type, size_bytes, sha256, stored_path, doc_year,
+            }
+        },
+    ))
+}
+
+pub struct StoredFile {
+    pub stored_path: String,
+    pub content_type: String,
+    pub filename: String,
+}
+
+pub async fn get_company_file(
+    pool: &PgPool,
+    company_id: Uuid,
+    id: Uuid,
+) -> AppResult<Option<StoredFile>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT stored_path, content_type, filename FROM company_files
+         WHERE company_id = $1 AND id = $2",
+    )
+    .bind(company_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(row.map(|(stored_path, content_type, filename)| StoredFile {
+        stored_path,
+        content_type,
+        filename,
+    }))
+}
+
+/// Delete a file row; returns its on-disk path so the caller can unlink it.
+pub async fn delete_company_file(
+    pool: &PgPool,
+    company_id: Uuid,
+    id: Uuid,
+) -> AppResult<Option<String>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let row: Option<(String,)> = sqlx::query_as(
+        "DELETE FROM company_files WHERE company_id = $1 AND id = $2 RETURNING stored_path",
+    )
+    .bind(company_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(row.map(|(p,)| p))
+}
+
+// --- Address book (wallet/counterparty labels) -----------------------------
+
+pub struct AddressLabelRow {
+    pub id: Uuid,
+    pub address: String,
+    pub name: String,
+    pub kind: String,
+    pub account_code: String,
+    pub note: String,
+}
+
+pub async fn list_address_labels(
+    pool: &PgPool,
+    company_id: Uuid,
+) -> AppResult<Vec<AddressLabelRow>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let rows = sqlx::query(
+        "SELECT id, address, name, kind, account_code, note
+         FROM address_labels WHERE company_id = $1 ORDER BY name ASC",
+    )
+    .bind(company_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| AddressLabelRow {
+            id: r.get(0),
+            address: r.get(1),
+            name: r.get(2),
+            kind: r.get(3),
+            account_code: r.get(4),
+            note: r.get(5),
+        })
+        .collect())
+}
+
+/// Insert or update a label (keyed on lowercased address, unique per company).
+pub async fn upsert_address_label(
+    pool: &PgPool,
+    company_id: Uuid,
+    address: &str,
+    name: &str,
+    kind: &str,
+    account_code: &str,
+    note: &str,
+) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query(
+        "INSERT INTO address_labels (company_id, address, name, kind, account_code, note)
+         VALUES ($1, lower($2), $3, $4, $5, $6)
+         ON CONFLICT (company_id, address)
+         DO UPDATE SET name = EXCLUDED.name, kind = EXCLUDED.kind,
+                       account_code = EXCLUDED.account_code, note = EXCLUDED.note",
+    )
+    .bind(company_id)
+    .bind(address.trim())
+    .bind(name.trim())
+    .bind(kind.trim())
+    .bind(account_code.trim())
+    .bind(note.trim())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn delete_address_label(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query("DELETE FROM address_labels WHERE company_id = $1 AND id = $2")
+        .bind(company_id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 pub async fn create_customer(

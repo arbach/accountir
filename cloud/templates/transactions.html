@@ -5,7 +5,7 @@
   <div><h1>Transactions</h1><div class="subtitle">{{ rows.len() }} lines · all journal-line activity</div></div>
 </div>
 
-<form method="get" action="/app/transactions" class="card" style="margin-bottom: var(--gap);" data-remember="transactions">
+<form id="txfilter" method="get" action="/app/transactions" class="card" style="margin-bottom: var(--gap);" data-remember="transactions">
   <div class="form-row" style="grid-template-columns: repeat(5, 1fr); align-items: end;">
     <label class="field"><span class="label-text">Preset</span><select onchange="datePreset(this)" title="Date presets">
         <option value="">Preset…</option>
@@ -38,15 +38,24 @@
       </select>
     </label>
     <label class="field"><span class="label-text">Type</span>
-      <select name="type">
+      <select name="type" title="Debit vs credit entries. Note: a debit is money IN for an asset/bank account but money OUT (a cost) for an expense account — direction depends on the account.">
+
         <option value="">All</option>
-        <option value="debit" {% if selected_type.as_deref() == Some("debit") %}selected{% endif %}>Money in (debit)</option>
-        <option value="credit" {% if selected_type.as_deref() == Some("credit") %}selected{% endif %}>Money out (credit)</option>
+        <option value="debit" {% if selected_type.as_deref() == Some("debit") %}selected{% endif %}>Debit · Money In</option>
+        <option value="credit" {% if selected_type.as_deref() == Some("credit") %}selected{% endif %}>Credit · Money Out</option>
       </select>
     </label>
     <label class="field"><span class="label-text">Min amount</span><input type="text" name="min_amount" value="{{ min_amount_str }}" placeholder="$ min" inputmode="decimal" style="width: 90px;"></label>
     <label class="field"><span class="label-text">Max amount</span><input type="text" name="max_amount" value="{{ max_amount_str }}" placeholder="$ max" inputmode="decimal" style="width: 90px;"></label>
     <label class="field"><span class="label-text">Search memo</span><input type="text" name="search" value="{{ search.as_deref().unwrap_or("") }}" placeholder="text in memo"></label>
+    <label class="field"><span class="label-text">Sort by</span>
+      <select name="sort" onchange="if(window.saveFilters)saveFilters(this.form); this.form.submit();">
+        <option value="date_desc" {% if selected_sort == "date_desc" %}selected{% endif %}>Date (newest first)</option>
+        <option value="date_asc" {% if selected_sort == "date_asc" %}selected{% endif %}>Date (oldest first)</option>
+        <option value="amount_desc" {% if selected_sort == "amount_desc" %}selected{% endif %}>Amount (largest first)</option>
+        <option value="amount_asc" {% if selected_sort == "amount_asc" %}selected{% endif %}>Amount (smallest first)</option>
+      </select>
+    </label>
     <div style="display: flex; gap: 6px; align-items: end; padding-bottom: 12px;">
       <button type="submit" class="btn btn-secondary">Apply</button>
       <a href="/app/transactions?cleared=1" class="btn btn-ghost" data-remember-clear="transactions">Clear</a>
@@ -65,10 +74,10 @@
   <table>
     <thead><tr>
       <th style="width:32px;"><input type="checkbox" id="select-all"></th>
-      <th style="width:100px">Date</th>
+      <th style="width:100px"><a href="#" class="tx-sort" data-field="date" style="text-decoration:none;color:inherit;cursor:pointer;">Date{% if selected_sort == "date_desc" %} ↓{% else if selected_sort == "date_asc" %} ↑{% endif %}</a></th>
       <th>Memo</th>
       <th style="width:240px">Account</th>
-      <th class="num" style="width:110px">Debit</th>
+      <th class="num" style="width:110px"><a href="#" class="tx-sort" data-field="amount" style="text-decoration:none;color:inherit;cursor:pointer;">Debit{% if selected_sort == "amount_desc" %} ↓{% else if selected_sort == "amount_asc" %} ↑{% endif %}</a></th>
       <th class="num" style="width:110px">Credit</th>
       <th style="width:80px">Source</th>
       <th style="width:90px"></th>
@@ -78,7 +87,7 @@
       <tr {% if t.is_void %}style="opacity: 0.45; text-decoration: line-through;"{% endif %}>
         <td><input type="checkbox" name="line_ids" value="{{ t.line_id }}" class="bulk-check"></td>
         <td class="num" style="text-align:left;">{{ t.date }}</td>
-        <td>{{ t.memo }}{% if t.reference.is_some() %} <span class="muted" style="font-size:11px;">[{{ t.reference.as_deref().unwrap_or("") }}]</span>{% endif %}</td>
+        <td>{{ t.memo_display }}{% if t.reference.is_some() %} <span class="muted" style="font-size:11px;">[{{ t.reference.as_deref().unwrap_or("") }}]</span>{% endif %}</td>
         <td>
           <form method="post" action="/app/transactions/{{ t.line_id }}/reclassify" style="display:inline;">
             <select name="new_account_id" onchange="this.form.submit()" {% if t.is_void %}disabled{% endif %} style="font-size:12px; padding:4px 6px;">
@@ -133,6 +142,24 @@
     }
     all.addEventListener('change', () => { checks.forEach(c => c.checked = all.checked); refresh(); });
     checks.forEach(c => c.addEventListener('change', refresh));
+
+    // Clickable column headers: toggle asc/desc for that field, then re-apply
+    // the filter form (which carries all other filters + is remembered).
+    var current = "{{ selected_sort }}";
+    document.querySelectorAll('.tx-sort').forEach(function (a) {
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        var f = a.getAttribute('data-field');
+        var next = f === 'date'
+          ? (current === 'date_desc' ? 'date_asc' : 'date_desc')
+          : (current === 'amount_desc' ? 'amount_asc' : 'amount_desc');
+        var form = document.getElementById('txfilter');
+        var sel = form.querySelector('[name=sort]');
+        if (sel) { sel.value = next; }
+        if (window.saveFilters) saveFilters(form);
+        form.submit();
+      });
+    });
   })();
 </script>
 {% endif %}

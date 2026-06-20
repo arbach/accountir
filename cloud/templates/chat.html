@@ -6,7 +6,7 @@
     <div class="subtitle">Your company's dedicated AI accountant — persistent memory, live tool access to your books.</div>
   </div>
   <div class="actions">
-    <form method="post" action="/app/chat/clear" onsubmit="return confirm('Clear conversation history? The AI will forget this conversation.')" style="margin:0;">
+    <form method="post" action="/app/chat/clear?company={{ nav.active_company_id }}" onsubmit="return confirm('Clear conversation history? The AI will forget this conversation.')" style="margin:0;">
       <button class="btn btn-ghost" type="submit">Clear chat</button>
     </form>
   </div>
@@ -16,10 +16,17 @@
   <div id="messages" style="padding: 14px 18px; max-height: 56vh; overflow-y: auto;">
     {% for m in messages %}
       {% for line in m.lines %}
+      {% if line.role == "user" %}
+      <div style="margin-bottom: 14px; display:flex; flex-direction:column; align-items:flex-end;">
+        <div class="muted" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; color: var(--accent,#2563eb);">{{ line.role }}</div>
+        <div style="white-space: pre-wrap; font-size: 14px; background: var(--accent,#2563eb); color:#fff; padding:7px 11px; border-radius:12px 12px 2px 12px; max-width:80%; width:fit-content;">{{ line.body }}</div>
+      </div>
+      {% else %}
       <div style="margin-bottom: 14px;">
         <div class="muted" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;">{{ line.role }}</div>
         <div style="white-space: pre-wrap; font-size: 14px;" {% if line.role == "assistant" %}data-md{% endif %}>{{ line.body }}</div>
       </div>
+      {% endif %}
       {% endfor %}
     {% endfor %}
     {% if messages.is_empty() %}
@@ -34,10 +41,11 @@
     </div>
     {% endif %}
   </div>
-  <form id="chat-form" method="post" action="/app/chat/messages" style="border-top: 1px solid var(--border); padding: 12px 14px; display: flex; gap: 8px;">
+  <form id="chat-form" method="post" action="/app/chat/messages?company={{ nav.active_company_id }}" style="border-top: 1px solid var(--border); padding: 12px 14px; display: flex; gap: 8px;">
     <input type="file" id="chat-file" accept=".pdf,.csv,.txt,.md,.json" multiple style="display:none;">
     <button type="button" class="btn btn-ghost" id="chat-attach" title="Upload a file for the AI (PDF, CSV, text)">&#128206;</button>
     <input id="chat-input" type="text" name="message" placeholder="Ask anything…" required autofocus autocomplete="off" style="flex: 1;">
+    <button id="chat-stop" type="button" class="btn btn-danger" style="display:none;" title="Stop the agent">&#9209;</button>
     <button id="chat-send" type="submit" class="btn btn-primary">Send</button>
   </form>
 </div>
@@ -48,6 +56,20 @@
   var input = document.getElementById('chat-input');
   var sendBtn = document.getElementById('chat-send');
   var box = document.getElementById('messages');
+  // Pin this tab to the company it rendered with (see the floating widget).
+  var COMPANY_ID = "{{ nav.active_company_id }}";
+  function withCompany(url) {
+    if (!COMPANY_ID) { return url; }
+    return url + (url.indexOf('?') < 0 ? '?' : '&') + 'company=' + encodeURIComponent(COMPANY_ID);
+  }
+
+  // Auto-scroll only while parked at the bottom, so reading scrollback while
+  // the agent is thinking isn't interrupted by being yanked back down.
+  var pinned = true;
+  box.addEventListener('scroll', function () {
+    pinned = (box.scrollHeight - box.scrollTop - box.clientHeight) < 80;
+  });
+  function stick() { if (pinned) { box.scrollTop = box.scrollHeight; } }
 
   // Server-rendered history arrives as plain text; render assistant
   // messages as markdown once the shared mdHtml helper has loaded.
@@ -57,27 +79,50 @@
   });
 
   function bubble(role, body) {
+    var isUser = role === 'user';
     var wrap = document.createElement('div');
-    wrap.style.marginBottom = '14px';
+    wrap.style.cssText = 'margin-bottom:14px;' + (isUser ? 'display:flex;flex-direction:column;align-items:flex-end;' : '');
     var r = document.createElement('div');
     r.className = 'muted';
-    r.style.cssText = 'font-size:11px;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;';
+    r.style.cssText = 'font-size:11px;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;'
+      + (isUser ? 'color:var(--accent,#2563eb);' : '');
     r.textContent = role;
     var b = document.createElement('div');
-    b.style.cssText = 'white-space:pre-wrap;font-size:14px;';
+    b.style.cssText = 'white-space:pre-wrap;font-size:14px;'
+      + (isUser ? 'background:var(--accent,#2563eb);color:#fff;padding:7px 11px;border-radius:12px 12px 2px 12px;max-width:80%;width:fit-content;' : '');
     if (role === 'assistant') { mdSet(b, body || ''); } else { b.textContent = body || ''; }
     wrap.appendChild(r); wrap.appendChild(b);
     box.appendChild(wrap);
-    box.scrollTop = box.scrollHeight;
+    stick();
     return b;
   }
 
+  var busy = false, abort = null, stopped = false;
+  var stopBtn = document.getElementById('chat-stop');
+  function setBusy(on) { busy = on; sendBtn.textContent = on ? 'Thinking…' : 'Send'; stopBtn.style.display = on ? '' : 'none'; }
+  stopBtn.addEventListener('click', function () {
+    stopped = true;
+    if (abort) { try { abort.abort(); } catch (_) {} }
+    fetch(withCompany('/app/chat/stop'), { method: 'POST' }).catch(function () {});
+    setBusy(false);
+  });
+  // Queue survives the per-turn reload via sessionStorage; processed on load.
+  function qget() { try { return JSON.parse(sessionStorage.getItem('chatQueue') || '[]'); } catch (_) { return []; } }
+  function qset(a) { try { sessionStorage.setItem('chatQueue', JSON.stringify(a)); } catch (_) {} }
+  function enqueue(text) {
+    var a = qget(); a.push(text); qset(a);
+    var el = document.createElement('div'); el.className = 'muted'; el.style.cssText = 'opacity:.6;margin-bottom:14px;font-size:13px;';
+    el.textContent = '⏳ queued: ' + text; box.appendChild(el); box.scrollTop = box.scrollHeight;
+  }
+
   async function runTurn(displayText, doFetch, fallback) {
-    input.disabled = true; sendBtn.disabled = true; sendBtn.textContent = 'Thinking…';
+    stopped = false; abort = new AbortController();
+    setBusy(true); input.disabled = false;
+    pinned = true; // the user just sent — follow this turn to the bottom
     bubble('user', displayText);
     var live = bubble('assistant', '');
     var typing = typingEl();
-    box.appendChild(typing); box.scrollTop = box.scrollHeight;
+    box.appendChild(typing); stick();
     var pendingNav = null;
 
     function handle(ev) {
@@ -85,7 +130,7 @@
         var d = ev.event;
         if (d.type === 'content_block_delta' && d.delta && d.delta.type === 'text_delta') {
           mdAppend(live, d.delta.text);
-          box.scrollTop = box.scrollHeight;
+          stick();
         }
       } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
         for (var i = 0; i < ev.message.content.length; i++) {
@@ -95,21 +140,22 @@
             mdSet(live, blk.text);
             live = bubble('assistant', '');
           } else if (blk.type === 'tool_use') {
+            // Internal bookkeeping operation — capture navigation, show nothing.
             if ((blk.name || '').indexOf('navigate_to_page') >= 0 && blk.input && blk.input.page) { pendingNav = blk.input.page; }
-            bubble('assistant · tool (' + (blk.name || '?') + ')', JSON.stringify(blk.input || {}));
-            live = bubble('assistant', '');
           }
         }
       } else if (ev.type === 'upload_progress') {
         live.textContent = ev.note || '';
+      } else if (ev.type === 'cancelled') {
+        live.textContent = '(stopped)';
       } else if (ev.type === 'daemon_error') {
         live.textContent = '(agent error: ' + (ev.error || 'unknown') + ')';
       }
-      box.appendChild(typing); box.scrollTop = box.scrollHeight;
+      box.appendChild(typing); stick();
     }
 
     try {
-      var resp = await doFetch();
+      var resp = await doFetch(abort.signal);
       if (!resp.ok) { var msg = ''; try { msg = await resp.text(); } catch (_) {} throw new Error('HTTP ' + resp.status + (msg ? ': ' + msg.slice(0, 300) : '')); }
       if (!resp.body) throw new Error('HTTP ' + resp.status);
       var reader = resp.body.getReader();
@@ -129,41 +175,49 @@
         }
       }
       typing.remove();
+      if (stopped) { return; } // manual stop — stay put, don't reload
       // Navigate if the agent drove the UI; otherwise reload for canonical history.
       if (pendingNav) { window.location = pendingNav; } else { window.location.reload(); }
     } catch (err) {
       typing.remove();
+      if (stopped) { if (!live.textContent) { live.textContent = '(stopped)'; } return; }
       live.textContent = '(connection error: ' + err.message + ')';
-      input.disabled = false; sendBtn.disabled = false; sendBtn.textContent = 'Send';
+      setBusy(false);
       if (fallback) { fallback(); }
     }
   }
 
+  function startStreamTurn(text) {
+    runTurn(text, function (signal) {
+      return fetch(withCompany('/app/chat/stream'), {
+        method: 'POST', signal: signal,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'message=' + encodeURIComponent(text),
+      });
+    }, function () { input.value = text; form.submit(); });
+  }
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var text = input.value.trim();
     if (!text) return;
     input.value = '';
-    runTurn(text, function () {
-      return fetch('/app/chat/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'message=' + encodeURIComponent(text),
-      });
-    }, function () {
-      // Graceful fallback to the blocking form post.
-      input.value = text;
-      form.submit();
-    });
+    if (busy) { enqueue(text); return; } // queue follow-ups while the agent works
+    startStreamTurn(text);
   });
+  // On load, drain one queued message (each turn reloads, so this advances the queue).
+  (function () {
+    var q = qget();
+    if (q.length) { var next = q.shift(); qset(q); setTimeout(function () { startStreamTurn(next); }, 300); }
+  })();
 
   function uploadFiles(fileList) {
     var fs = Array.prototype.slice.call(fileList); if (!fs.length) return;
     var fd = new FormData();
     fs.forEach(function (f) { fd.append('file', f, f.name); });
     var names = fs.map(function (f) { return f.name; }).join(', ');
-    runTurn('📎 Uploaded: ' + names, function () {
-      return fetch('/app/chat/upload', { method: 'POST', body: fd });
+    if (busy) { enqueue('📎 ' + names + ' (re-attach after current turn)'); return; }
+    runTurn('📎 Uploaded: ' + names, function (signal) {
+      return fetch(withCompany('/app/chat/upload'), { method: 'POST', body: fd, signal: signal });
     });
   }
   var fileInput = document.getElementById('chat-file');
