@@ -149,6 +149,7 @@ impl<'a> Projector<'a> {
                     crate::events::types::JournalEntrySource::Recurring => "recurring",
                     crate::events::types::JournalEntrySource::System => "system",
                     crate::events::types::JournalEntrySource::Plaid => "plaid",
+                    crate::events::types::JournalEntrySource::Crypto => "crypto",
                 });
 
                 self.conn.execute(

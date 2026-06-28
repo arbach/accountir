@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Transactions · Accountir</title>
+  <style>
+    :root {
+      --bg: #0f1115; --panel: #171a21; --border: #262b36; --fg: #e6e9ef;
+      --dim: #9aa3b2; --accent: #5cc8ff; --good: #4ade80; --bad: #f87171; --chip: #1f2530;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    a { color: inherit; text-decoration: none; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 24px 20px 60px; }
+    h1 { font-size: 20px; margin: 0 0 16px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+    th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #1d222c; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .chip { display: inline-block; padding: 1px 9px; border-radius: 999px; background: var(--chip);
+      font-size: 12px; color: var(--dim); }
+    .chip.bad { background: rgba(248,113,113,.15); color: var(--bad); }
+    .vendor { color: var(--accent); }
+    .muted { color: var(--dim); }
+    .error { color: var(--bad); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Transactions</h1>
+    <div class="panel">
+      <table>
+        <thead><tr>
+          <th>Date</th><th>Memo</th><th>Vendor</th><th>Source</th><th class="num">Amount</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    function esc(s) {
+      return (s ?? "").toString().replace(/[&<>"]/g, c =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    }
+    function fmtAmount(a) {
+      return (a / 100).toLocaleString(undefined, { minimumFractionDigits: 2 });
+    }
+    async function load() {
+      const tbody = document.getElementById("rows");
+      let txs;
+      try {
+        const res = await fetch("/transactions");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        txs = await res.json();
+      } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="5" class="error">Failed to load: ' + esc(e.message) + "</td></tr>";
+        return;
+      }
+      if (!txs.length) { tbody.innerHTML = '<tr><td colspan="5" class="muted">No transactions.</td></tr>'; return; }
+      tbody.innerHTML = "";
+      for (const tx of txs) {
+        const tr = document.createElement("tr");
+        tr.onclick = () => location.href = "/app/transactions/" + encodeURIComponent(tx.id);
+        const voidChip = tx.is_void ? ' <span class="chip bad">void</span>' : "";
+        const vendor = tx.vendor ? '<span class="vendor">' + esc(tx.vendor) + "</span>" : '<span class="muted">—</span>';
+        tr.innerHTML =
+          "<td>" + esc(tx.date) + "</td>" +
+          "<td>" + esc(tx.memo) + voidChip + "</td>" +
+          "<td>" + vendor + "</td>" +
+          '<td><span class="chip">' + esc(tx.source || "manual") + "</span></td>" +
+          '<td class="num">' + fmtAmount(tx.amount) + "</td>";
+        tbody.appendChild(tr);
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

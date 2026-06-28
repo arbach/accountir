@@ -44,6 +44,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), MigrationError> {
             7,
             include_str!("../../migrations/007_plaid_balance_snapshot.sql"),
         ),
+        (8, include_str!("../../migrations/008_crypto.sql")),
+        (
+            9,
+            include_str!("../../migrations/009_bank_statement_files.sql"),
+        ),
     ];
 
     for (version, sql) in migrations {
@@ -293,6 +298,61 @@ pub fn init_schema(conn: &Connection) -> Result<(), MigrationError> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_transfer_status ON plaid_transfer_candidates(status);
+
+        -- Crypto wallets: map an on-chain address to a local ledger account.
+        CREATE TABLE IF NOT EXISTS crypto_wallets (
+            id TEXT PRIMARY KEY,
+            chain TEXT NOT NULL,
+            address TEXT NOT NULL,
+            local_account_id TEXT NOT NULL REFERENCES accounts(id),
+            label TEXT,
+            explorer_base_url TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(chain, address)
+        );
+
+        -- Imported crypto transactions: on-chain hash + explorer link + verification record.
+        -- PRIMARY KEY(chain, tx_hash) prevents importing the same on-chain tx twice.
+        CREATE TABLE IF NOT EXISTS crypto_transactions (
+            chain TEXT NOT NULL,
+            tx_hash TEXT NOT NULL,
+            entry_id TEXT NOT NULL REFERENCES journal_entries(id),
+            wallet_id TEXT REFERENCES crypto_wallets(id) ON DELETE SET NULL,
+            address TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            asset TEXT NOT NULL,
+            block_number INTEGER,
+            block_time TEXT,
+            explorer_url TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            verified INTEGER NOT NULL DEFAULT 0,
+            verified_at TEXT,
+            verify_error TEXT,
+            imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (chain, tx_hash)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_crypto_tx_entry ON crypto_transactions(entry_id);
+        CREATE INDEX IF NOT EXISTS idx_crypto_tx_wallet ON crypto_transactions(wallet_id);
+
+        -- Statement files: one row per imported bank statement file (SHA-256 for dedup).
+        CREATE TABLE IF NOT EXISTS statement_files (
+            id INTEGER PRIMARY KEY,
+            file_path TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_hash TEXT NOT NULL UNIQUE,
+            bank_id TEXT,
+            account_id TEXT REFERENCES accounts(id),
+            imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- Link each imported journal entry to the statement file it came from.
+        CREATE TABLE IF NOT EXISTS entry_statement_files (
+            entry_id TEXT PRIMARY KEY REFERENCES journal_entries(id),
+            statement_file_id INTEGER NOT NULL REFERENCES statement_files(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_entry_statement_file ON entry_statement_files(statement_file_id);
 
         -- Indexes for common queries
         CREATE INDEX IF NOT EXISTS idx_journal_entries_date ON journal_entries(date);

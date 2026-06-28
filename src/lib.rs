@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod config;
+pub mod crypto;
 pub mod gnucash;
 pub mod queries;
 pub mod server;

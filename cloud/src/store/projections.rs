@@ -65,6 +65,10 @@ pub async fn apply<'a>(
                     accountir_core::events::types::JournalEntrySource::Recurring => "recurring",
                     accountir_core::events::types::JournalEntrySource::System => "system",
                     accountir_core::events::types::JournalEntrySource::Plaid => "plaid",
+                    // Crypto-source entries originate only in the local engine, never in the
+                    // cloud app; this arm exists for exhaustiveness. The cloud
+                    // journal_entry_source enum has no 'crypto', so fall back to 'import'.
+                    accountir_core::events::types::JournalEntrySource::Crypto => "import",
                 });
             sqlx::query(
                 r#"

@@ -23,6 +23,7 @@ pub enum JournalEntrySource {
     Recurring,
     System,
     Plaid,
+    Crypto,
 }
 
 /// Info about a Plaid account, used in PlaidItemConnected events

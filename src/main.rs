@@ -67,6 +67,10 @@ enum Commands {
     #[command(subcommand)]
     Plaid(PlaidCommands_),
 
+    /// Crypto wallet sync & on-chain verification
+    #[command(subcommand)]
+    Crypto(CryptoCommands_),
+
     /// Import a GnuCash file into a fresh database
     ImportGnucash {
         /// Path to the GnuCash file (gzip or plain XML)
@@ -209,8 +213,59 @@ enum PlaidCommands_ {
     Status,
 }
 
+#[derive(Subcommand)]
+enum CryptoCommands_ {
+    /// Configure the block-explorer / Alchemy fallback for crypto sync
+    Config {
+        /// Etherscan-style API base URL (default: Etherscan V2 multichain)
+        #[arg(long)]
+        explorer_base_url: Option<String>,
+        /// Explorer API key (e.g. Etherscan)
+        #[arg(long)]
+        explorer_api_key: Option<String>,
+        /// Alchemy API key fallback (else uses ALCHEMY_API_KEY env)
+        #[arg(long)]
+        alchemy_api_key: Option<String>,
+    },
+    /// Connect a wallet: map an on-chain address to a ledger account
+    Connect {
+        /// Chain name (ethereum, polygon, arbitrum, optimism, base)
+        #[arg(long)]
+        chain: String,
+        /// On-chain address
+        #[arg(long)]
+        address: String,
+        /// Local ledger account id to post transactions to
+        #[arg(long)]
+        account_id: String,
+        /// Optional human label
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// List connected wallets
+    List,
+    /// Fetch on-chain transactions and import new ones (deduplicated)
+    Sync {
+        /// Wallet id to sync (syncs all if omitted)
+        #[arg(long)]
+        wallet_id: Option<String>,
+    },
+    /// Re-fetch each imported tx and verify it against the chain
+    Verify {
+        /// Wallet id to verify (verifies all if omitted)
+        #[arg(long)]
+        wallet_id: Option<String>,
+    },
+    /// Show crypto configuration status
+    Status,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env (if present) so ALCHEMY_API_KEY and friends are available without
+    // requiring the user to export them manually.
+    load_dotenv();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -304,6 +359,11 @@ async fn main() -> Result<()> {
 
         Commands::Plaid(cmd) => {
             handle_plaid_command(cmd).await?;
+        }
+
+        Commands::Crypto(cmd) => {
+            let mut store = EventStore::open(&cli.database)?;
+            handle_crypto_command(&mut store, cmd).await?;
         }
 
         Commands::ImportGnucash { file, output } => {
@@ -866,6 +926,197 @@ fn handle_import_gnucash(file: &std::path::Path, output: Option<PathBuf>) -> Res
 
     println!();
     println!("Database written to: {}", db_path.display());
+
+    Ok(())
+}
+
+/// Minimal `.env` loader: sets any `KEY=value` pairs that aren't already in the
+/// environment. Avoids pulling in a dotenv dependency.
+fn load_dotenv() {
+    if let Ok(contents) = std::fs::read_to_string(".env") {
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once('=') {
+                let k = k.trim();
+                let v = v.trim().trim_matches('"');
+                if !k.is_empty() && std::env::var_os(k).is_none() {
+                    std::env::set_var(k, v);
+                }
+            }
+        }
+    }
+}
+
+/// Build an explorer client for a chain from crypto config (with Alchemy fallback).
+fn build_crypto_explorer(
+    cfg: &accountir::config::CryptoConfig,
+    chain: &str,
+) -> Result<accountir::crypto::CryptoExplorer> {
+    let spec = accountir::crypto::explorer::chain_spec(chain)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported chain '{}'", chain))?;
+    if !cfg.is_configured() {
+        anyhow::bail!(
+            "Crypto not configured. Set an explorer key and/or ALCHEMY_API_KEY. \
+             Run: accountir crypto config --explorer-api-key <key>"
+        );
+    }
+    Ok(accountir::crypto::CryptoExplorer::new(
+        spec,
+        cfg.explorer_base_url.clone(),
+        cfg.explorer_api_key.clone(),
+        cfg.resolved_alchemy_key(),
+    ))
+}
+
+async fn handle_crypto_command(store: &mut EventStore, cmd: CryptoCommands_) -> Result<()> {
+    use accountir::commands::crypto_commands::CryptoCommands;
+    use accountir::config::AppConfig;
+
+    init_schema(store.connection())?;
+
+    match cmd {
+        CryptoCommands_::Config {
+            explorer_base_url,
+            explorer_api_key,
+            alchemy_api_key,
+        } => {
+            let mut config = AppConfig::load();
+            if let Some(url) = explorer_base_url {
+                config.crypto.explorer_base_url = Some(url);
+            }
+            if explorer_api_key.is_some() {
+                config.crypto.explorer_api_key = explorer_api_key;
+            }
+            if alchemy_api_key.is_some() {
+                config.crypto.alchemy_api_key = alchemy_api_key;
+            }
+            config.save()?;
+            println!("Crypto explorer configured.");
+        }
+
+        CryptoCommands_::Connect {
+            chain,
+            address,
+            account_id,
+            label,
+        } => {
+            // Validate the chain is known up-front.
+            if accountir::crypto::explorer::chain_spec(&chain).is_none() {
+                anyhow::bail!("Unsupported chain '{}'", chain);
+            }
+            let mut cmds = CryptoCommands::new(store, "cli-user".to_string());
+            let id =
+                cmds.connect_wallet(&chain, &address, &account_id, label.as_deref(), None)?;
+            println!("Connected wallet {} ({} {})", id, chain, address);
+        }
+
+        CryptoCommands_::List => {
+            let cmds = CryptoCommands::new(store, "cli-user".to_string());
+            let wallets = cmds.list_wallets()?;
+            if wallets.is_empty() {
+                println!("No crypto wallets connected.");
+            } else {
+                println!("{:<38} {:<10} {:<44} LABEL", "ID", "CHAIN", "ADDRESS");
+                for w in wallets {
+                    println!(
+                        "{:<38} {:<10} {:<44} {}",
+                        w.id,
+                        w.chain,
+                        w.address,
+                        w.label.as_deref().unwrap_or("")
+                    );
+                }
+            }
+        }
+
+        CryptoCommands_::Sync { wallet_id } => {
+            let config = AppConfig::load();
+            let wallets = {
+                let cmds = CryptoCommands::new(store, "cli-user".to_string());
+                match wallet_id {
+                    Some(id) => vec![cmds.get_wallet(&id)?],
+                    None => cmds.list_wallets()?,
+                }
+            };
+            if wallets.is_empty() {
+                println!("No wallets to sync.");
+            }
+            for w in wallets {
+                let explorer = build_crypto_explorer(&config.crypto, &w.chain)?;
+                println!("Syncing {} {} …", w.chain, w.address);
+                let txs = explorer.list_address_txs(&w.address).await?;
+                let mut cmds = CryptoCommands::new(store, "cli-user".to_string());
+                let summary = cmds.import_transactions(&w, &txs, &explorer)?;
+                println!(
+                    "  imported {}, duplicates {}, skipped {}",
+                    summary.imported, summary.skipped_duplicate, summary.skipped_invalid
+                );
+            }
+        }
+
+        CryptoCommands_::Verify { wallet_id } => {
+            let config = AppConfig::load();
+            let wallets = {
+                let cmds = CryptoCommands::new(store, "cli-user".to_string());
+                match wallet_id {
+                    Some(id) => vec![cmds.get_wallet(&id)?],
+                    None => cmds.list_wallets()?,
+                }
+            };
+            for w in wallets {
+                let explorer = build_crypto_explorer(&config.crypto, &w.chain)?;
+                let hashes = {
+                    let cmds = CryptoCommands::new(store, "cli-user".to_string());
+                    cmds.wallet_tx_hashes(&w.id)?
+                };
+                println!("Verifying {} txs for {} {} …", hashes.len(), w.chain, w.address);
+                let mut ok = 0usize;
+                let mut bad = 0usize;
+                for hash in hashes {
+                    let onchain = explorer.get_tx(&hash).await.unwrap_or(None);
+                    let mut cmds = CryptoCommands::new(store, "cli-user".to_string());
+                    match cmds.record_verification(&w.chain, &hash, onchain.as_ref())? {
+                        true => ok += 1,
+                        false => bad += 1,
+                    }
+                }
+                println!("  verified {}, failed {}", ok, bad);
+            }
+        }
+
+        CryptoCommands_::Status => {
+            let config = AppConfig::load();
+            println!("Crypto Configuration Status");
+            println!("{}", "=".repeat(40));
+            println!(
+                "Explorer URL: {}",
+                config.crypto.explorer_base_url.as_deref().unwrap_or("(none)")
+            );
+            println!(
+                "Explorer key: {}",
+                if config.crypto.explorer_api_key.is_some() {
+                    "set"
+                } else {
+                    "(none)"
+                }
+            );
+            println!(
+                "Alchemy key:  {}",
+                if config.crypto.resolved_alchemy_key().is_some() {
+                    "set"
+                } else {
+                    "(none)"
+                }
+            );
+            println!(
+                "Usable:       {}",
+                if config.crypto.is_configured() { "yes" } else { "no" }
+            );
+        }
+    }
 
     Ok(())
 }
