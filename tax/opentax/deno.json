@@ -1,0 +1,19 @@
+{
+  "name": "@filed/tax-engine",
+  "version": "0.0.1",
+  "exports": "./mod.ts",
+  "imports": {
+    "zod": "npm:zod@^3.24",
+    "pdf-lib": "npm:pdf-lib@^1.17.1",
+    "@std/assert": "jsr:@std/assert",
+    "@std/fs": "jsr:@std/fs",
+    "@std/cli": "jsr:@std/cli",
+    "@std/path": "jsr:@std/path"
+  },
+  "tasks": {
+    "tax": "deno run --allow-read --allow-write --allow-net=www.irs.gov cli/main.ts",
+    "test": "deno test --allow-read --allow-write --allow-run=xmllint --allow-net=www.irs.gov",
+    "bench": "deno run --allow-read --allow-write --allow-run benchmark/run_benchmark.ts",
+    "compile": "deno compile --allow-read --allow-write --allow-net=www.irs.gov --output opentax cli/main.ts"
+  }
+}

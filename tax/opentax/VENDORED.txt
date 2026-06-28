@@ -1,0 +1,1 @@
+opentax vendored from https://github.com/filedcom/opentax (shallow clone, 2026-06-28). To sync upstream: re-clone and merge our forms/ + catalog.ts additions.

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "opentax",
+  "owner": {
+    "name": "Filed"
+  },
+  "plugins": [
+    {
+      "name": "opentax",
+      "source": "./",
+      "description": "Open-source federal tax preparation. Includes a tax preparer that walks you through filing, and a tax reviewer that audits completed returns against source documents.",
+      "version": "1.0.3",
+      "author": {
+        "name": "Filed"
+      }
+    }
+  ]
+}

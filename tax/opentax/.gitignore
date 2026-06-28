@@ -1,0 +1,4 @@
+# vendored: skip heavy web-doc fonts + deno runtime state (not needed to build/run)
+/docs/fonts/
+/.state/
+/.observer.lock
