@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Transaction · Maven{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div>
+    <h1>{{ entry.memo_display }}</h1>
+    <div class="subtitle">
+      {{ entry.date }} · <strong>{{ entry.total_debits() }}</strong> · <span class="badge">{{ entry.source_label() }}</span>
+      {% if entry.is_void %} <span class="badge">VOID</span>{% endif %}
+    </div>
+  </div>
+  <div><a href="/app/transactions" class="btn btn-ghost">← Transactions</a></div>
+</div>
+
+<div class="card" style="margin-bottom: var(--gap);">
+  <h3 style="margin-top:0;">From → To</h3>
+  <div class="form-row" style="grid-template-columns: 60px 1fr;">
+    <div class="muted">From</div>
+    <div>
+      {% match entry.from %}{% when Some with (e) %}
+        <a href="/app/transactions?account_id={{ e.account_id }}">{{ e.account_number }} — {{ e.account_name }}</a>
+        {% match e.wallet %}{% when Some with (w) %}<div style="margin-top:2px;">{% match e.wallet_name %}{% when Some with (n) %}<strong>{{ n }}</strong> {% when None %}{% endmatch %}<code>{{ w }}</code>{% match e.wallet_url %}{% when Some with (u) %} <a href="{{ u }}" target="_blank" rel="noopener">↗</a>{% when None %}{% endmatch %}</div>{% when None %}{% endmatch %}
+      {% when None %}—{% endmatch %}
+    </div>
+    <div class="muted">To</div>
+    <div>
+      {% match entry.to %}{% when Some with (e) %}
+        <a href="/app/transactions?account_id={{ e.account_id }}">{{ e.account_number }} — {{ e.account_name }}</a>
+        {% match e.wallet %}{% when Some with (w) %}<div style="margin-top:2px;">{% match e.wallet_name %}{% when Some with (n) %}<strong>{{ n }}</strong> {% when None %}{% endmatch %}<code>{{ w }}</code>{% match e.wallet_url %}{% when Some with (u) %} <a href="{{ u }}" target="_blank" rel="noopener">↗</a>{% when None %}{% endmatch %}</div>{% when None %}{% endmatch %}
+      {% when None %}—{% endmatch %}
+    </div>
+  </div>
+</div>
+
+{% match entry.crypto %}
+{% when Some with (c) %}
+<div class="card" style="margin-bottom: var(--gap);">
+  <h3 style="margin-top:0;">On-chain transaction</h3>
+  <div class="form-row" style="grid-template-columns: 120px 1fr;">
+    <div class="muted">Chain</div><div>{{ c.chain }}</div>
+    <div class="muted">Tx hash</div><div><code>{{ c.tx_hash }}</code></div>
+    {% match c.from_address %}{% when Some with (a) %}<div class="muted">From</div><div><code>{{ a }}</code>{% match c.from_url() %}{% when Some with (u) %} <a href="{{ u }}" target="_blank" rel="noopener">↗</a>{% when None %}{% endmatch %}</div>{% when None %}{% endmatch %}
+    {% match c.to_address %}{% when Some with (a) %}<div class="muted">To</div><div><code>{{ a }}</code>{% match c.to_url() %}{% when Some with (u) %} <a href="{{ u }}" target="_blank" rel="noopener">↗</a>{% when None %}{% endmatch %}</div>{% when None %}{% endmatch %}
+    {% match c.symbol %}{% when Some with (s) %}<div class="muted">Asset</div><div>{{ s }}{% match c.direction %}{% when Some with (d) %} · {{ d }}{% when None %}{% endmatch %}</div>{% when None %}{% endmatch %}
+    <div class="muted">Verification</div>
+    <div>
+      {% if c.verified %}<span class="badge ok">✓ verified on-chain</span>
+      {% else %}<span class="badge warn">{{ c.verify_error.as_deref().unwrap_or("unverified") }}</span>{% endif %}
+    </div>
+    <div class="muted">Explorer</div>
+    <div><a href="{{ c.explorer_url }}" target="_blank" rel="noopener">View on block explorer →</a></div>
+  </div>
+</div>
+{% when None %}
+{% endmatch %}
+
+{% match entry.source_kind %}
+{% when Some with (k) %}
+<div class="card" style="margin-bottom: var(--gap);">
+  <h3 style="margin-top:0;">Source</h3>
+  <div class="form-row" style="grid-template-columns: 120px 1fr;">
+    <div class="muted">Origin</div><div><span class="badge">{{ k }}</span></div>
+    {% match entry.source_file %}{% when Some with (f) %}<div class="muted">Statement file</div><div><strong>{{ f }}</strong></div>{% when None %}{% endmatch %}
+  </div>
+</div>
+{% when None %}
+{% endmatch %}
+
+{% match entry.vendor %}
+{% when Some with (v) %}
+<div class="card" style="margin-bottom: var(--gap);">
+  <h3 style="margin-top:0;">Vendor</h3>
+  <div><a href="/app/address-book?q={{ v.name }}">{{ v.name }} →</a></div>
+  <div class="muted" style="margin-top:4px;">
+    {{ v.kind }}{% if v.account_code != "" %} · account {{ v.account_code }}{% endif %}
+  </div>
+  {% if v.address != "" %}<div class="muted" style="margin-top:4px;"><code>{{ v.address }}</code></div>{% endif %}
+</div>
+{% when None %}
+{% endmatch %}
+
+<div class="card">
+  <h3 style="margin-top:0;">Journal lines</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Account</th><th>Memo</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
+      <tbody>
+      {% for l in entry.lines %}
+        <tr>
+          <td>{{ l.account_number }} — {{ l.account_name }}</td>
+          <td class="muted">{% match l.memo %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %}</td>
+          <td class="num">{{ l.debit_display() }}</td>
+          <td class="num">{{ l.credit_display() }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th>Total</th><th></th>
+          <th class="num">{{ entry.total_debits() }}</th>
+          <th class="num">{{ entry.total_credits() }}</th>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% match entry.reference %}{% when Some with (r) %}<div class="muted" style="margin-top:8px;">Reference: {{ r }}</div>{% when None %}{% endmatch %}
+</div>
+{% endblock %}

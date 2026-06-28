@@ -18,9 +18,9 @@
   <thead><tr><th style="width:110px">Date</th><th>Memo</th><th style="width:140px">Reference</th><th class="num" style="width:140px">Amount</th></tr></thead>
   <tbody>
   {% for e in entries %}
-    <tr>
+    <tr style="cursor:pointer;" onclick="window.location='/app/entries/{{ e.id }}'">
       <td class="num" style="text-align: left;">{{ e.date }}</td>
-      <td>{{ e.memo }}</td>
+      <td><a href="/app/entries/{{ e.id }}" style="color:inherit;text-decoration:none;">{{ e.memo }}</a></td>
       <td class="muted">{{ e.reference.as_deref().unwrap_or("") }}</td>
       <td class="num">{{ e.total_display() }}</td>
     </tr>

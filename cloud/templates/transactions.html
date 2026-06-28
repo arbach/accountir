@@ -76,6 +76,7 @@
       <th style="width:32px;"><input type="checkbox" id="select-all"></th>
       <th style="width:100px"><a href="#" class="tx-sort" data-field="date" style="text-decoration:none;color:inherit;cursor:pointer;">Date{% if selected_sort == "date_desc" %} ↓{% else if selected_sort == "date_asc" %} ↑{% endif %}</a></th>
       <th>Memo</th>
+      <th style="width:150px">Vendor</th>
       <th style="width:240px">Account</th>
       <th class="num" style="width:110px"><a href="#" class="tx-sort" data-field="amount" style="text-decoration:none;color:inherit;cursor:pointer;">Debit{% if selected_sort == "amount_desc" %} ↓{% else if selected_sort == "amount_asc" %} ↑{% endif %}</a></th>
       <th class="num" style="width:110px">Credit</th>
@@ -87,7 +88,8 @@
       <tr {% if t.is_void %}style="opacity: 0.45; text-decoration: line-through;"{% endif %}>
         <td><input type="checkbox" name="line_ids" value="{{ t.line_id }}" class="bulk-check"></td>
         <td class="num" style="text-align:left;">{{ t.date }}</td>
-        <td>{{ t.memo_display }}{% if t.reference.is_some() %} <span class="muted" style="font-size:11px;">[{{ t.reference.as_deref().unwrap_or("") }}]</span>{% endif %}</td>
+        <td><a href="/app/entries/{{ t.entry_id }}" style="color:inherit;text-decoration:none;" title="View transaction detail">{{ t.memo_display }}</a>{% if t.reference.is_some() %} <span class="muted" style="font-size:11px;">[{{ t.reference.as_deref().unwrap_or("") }}]</span>{% endif %}</td>
+        <td>{% match t.vendor_name %}{% when Some with (vn) %}<a href="/app/transactions?vendor={{ vn }}" style="color:inherit;">{{ vn }}</a>{% when None %}<span class="muted">—</span>{% endmatch %}</td>
         <td>
           <form method="post" action="/app/transactions/{{ t.line_id }}/reclassify" style="display:inline;">
             <select name="new_account_id" onchange="this.form.submit()" {% if t.is_void %}disabled{% endif %} style="font-size:12px; padding:4px 6px;">

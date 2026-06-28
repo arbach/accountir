@@ -485,6 +485,7 @@ async fn list_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
         min_cents: input.get("min_amount").and_then(|v| v.as_f64()).map(|v| (v * 100.0).round() as i64),
         max_cents: input.get("max_amount").and_then(|v| v.as_f64()).map(|v| (v * 100.0).round() as i64),
         sort: input.get("sort").and_then(|v| v.as_str()).map(str::to_string),
+        vendor: input.get("vendor").and_then(|v| v.as_str()).map(str::to_string),
     };
     let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(50).min(200) as usize;
     // address book -> annotate any transaction whose memo names a known wallet

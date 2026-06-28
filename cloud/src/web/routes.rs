@@ -91,6 +91,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/transactions/{line_id}/reclassify", post(transaction_reclassify))
         .route("/app/entries/{entry_id}/void", post(entry_void))
         .route("/app/entries/{entry_id}/unvoid", post(entry_unvoid))
+        .route("/app/entries/{entry_id}", get(entry_detail_view))
         .route("/app/reports", get(reports_index))
         .route("/app/reports/trial-balance", get(trial_balance))
         .route("/app/reports/income-statement", get(report_income))
@@ -2222,6 +2223,7 @@ struct TxFilterQuery {
     min_amount: Option<String>,
     max_amount: Option<String>,
     sort: Option<String>,
+    vendor: Option<String>,
 }
 
 /// Prefix the address-book name in front of any known 0x… wallet address in a
@@ -2291,6 +2293,7 @@ async fn transactions_list(
         Some(s @ ("date_asc" | "amount_desc" | "amount_asc")) => s.to_string(),
         _ => "date_desc".to_string(),
     };
+    let vendor = q.vendor.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
     let filter = queries::TransactionFilter {
         start, end, account_id,
         source: source.clone(),
@@ -2300,6 +2303,7 @@ async fn transactions_list(
         min_cents,
         max_cents,
         sort: Some(sort.clone()),
+        vendor: vendor.clone(),
     };
     let mut rows = queries::list_transactions(&state.pool, company_id, &filter)
         .await
@@ -2335,6 +2339,72 @@ async fn transactions_list(
         min_amount_str: q.min_amount.unwrap_or_default(),
         max_amount_str: q.max_amount.unwrap_or_default(),
         selected_sort: sort,
+    })
+}
+
+#[derive(Template)]
+#[template(path = "entry_detail.html")]
+struct EntryDetailTpl {
+    user_email: Option<String>,
+    flash: Option<String>,
+    flash_kind: Option<String>,
+    nav: NavCtx,
+    entry: queries::EntryDetail,
+}
+
+/// Full detail for one journal entry: all lines, on-chain provenance (tx hash +
+/// explorer link + verification) for crypto entries, the source statement file for
+/// imports, and a link to the vendor (address book).
+async fn entry_detail_view(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(entry_id): axum::extract::Path<String>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let Ok(eid) = Uuid::parse_str(&entry_id) else {
+        return (StatusCode::BAD_REQUEST, "invalid entry id").into_response();
+    };
+
+    let mut entry = match queries::get_entry_detail(&state.pool, company_id, eid).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return (StatusCode::NOT_FOUND, "entry not found").into_response(),
+        Err(e) => {
+            tracing::error!("entry_detail: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+    };
+
+    // Apply address-book names to the memo for display.
+    let labels: std::collections::HashMap<String, String> =
+        queries::list_address_labels(&state.pool, company_id, None)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|l| (l.address, l.name))
+            .collect();
+    if !labels.is_empty() {
+        entry.memo_display = relabel_wallets(&entry.memo, &labels);
+    }
+    // Resolve the from/to wallet addresses to their address-book names.
+    for ep in [entry.from.as_mut(), entry.to.as_mut()].into_iter().flatten() {
+        if let Some(w) = &ep.wallet {
+            ep.wallet_name = labels.get(&w.to_lowercase()).cloned();
+        }
+    }
+
+    render(EntryDetailTpl {
+        user_email: Some(user.email),
+        flash: None,
+        flash_kind: None,
+        nav: build_nav(&state, &jar, user.id).await,
+        entry,
     })
 }
 

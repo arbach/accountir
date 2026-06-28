@@ -694,6 +694,8 @@ pub struct TransactionLine {
     pub currency: String,
     pub source: Option<String>,
     pub is_void: bool,
+    /// Vendor/payee from the vendors master (via journal_lines.vendor_id), if tagged.
+    pub vendor_name: Option<String>,
 }
 
 impl TransactionLine {
@@ -724,6 +726,8 @@ pub struct TransactionFilter {
     pub max_cents: Option<i64>,
     /// Sort order: "date_desc" (default), "date_asc", "amount_desc", "amount_asc".
     pub sort: Option<String>,
+    /// Filter to a vendor by name (substring match on the vendors master).
+    pub vendor: Option<String>,
 }
 
 pub async fn list_transactions(
@@ -751,10 +755,11 @@ pub async fn list_transactions(
         SELECT jl.id, je.id, je.date, je.memo, je.reference,
                a.id, a.account_number, a.name,
                jl.amount, jl.currency,
-               je.source::text, je.is_void
+               je.source::text, je.is_void, v.name
         FROM journal_lines jl
         JOIN journal_entries je ON je.id = jl.entry_id
         JOIN accounts a ON a.id = jl.account_id
+        LEFT JOIN vendors v ON v.id = jl.vendor_id
         WHERE ($1::date IS NULL OR je.date >= $1)
           AND ($2::date IS NULL OR je.date <= $2)
           AND ($3::uuid IS NULL OR jl.account_id = $3)
@@ -767,6 +772,7 @@ pub async fn list_transactions(
                OR ($7 = 'credit' AND jl.amount < 0))
           AND ($8::bigint IS NULL OR abs(jl.amount) >= $8)
           AND ($9::bigint IS NULL OR abs(jl.amount) <= $9)
+          AND ($10::text IS NULL OR v.name ILIKE '%' || $10 || '%')
         ORDER BY {order_by}
         LIMIT 500
         "#,
@@ -780,6 +786,7 @@ pub async fn list_transactions(
     .bind(filter.direction.as_deref())
     .bind(filter.min_cents)
     .bind(filter.max_cents)
+    .bind(filter.vendor.as_deref())
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -800,8 +807,314 @@ pub async fn list_transactions(
             currency: r.get(9),
             source: r.get(10),
             is_void: r.get(11),
+            vendor_name: r.get(12),
         })
         .collect())
+}
+
+// ── Entry detail (clickable transaction → full entry + provenance + vendor) ──
+
+#[derive(Debug, Clone)]
+pub struct EntryLineRow {
+    pub line_id: Uuid,
+    pub account_id: Uuid,
+    pub account_number: String,
+    pub account_name: String,
+    pub amount_cents: i64,
+    pub currency: String,
+    pub memo: Option<String>,
+}
+
+/// One side (from/to) of a transaction: an account, optionally a crypto wallet.
+#[derive(Debug, Clone)]
+pub struct Endpoint {
+    pub account_id: Uuid,
+    pub account_number: String,
+    pub account_name: String,
+    /// Full wallet address, when this is a crypto entry.
+    pub wallet: Option<String>,
+    /// Address-book name for the wallet, when known (e.g. "BitGetDeposit").
+    pub wallet_name: Option<String>,
+    /// Block-explorer link for the wallet, when known.
+    pub wallet_url: Option<String>,
+}
+
+impl EntryLineRow {
+    pub fn debit_display(&self) -> String {
+        if self.amount_cents > 0 { format_cents(self.amount_cents) } else { String::new() }
+    }
+    pub fn credit_display(&self) -> String {
+        if self.amount_cents < 0 { format_cents(-self.amount_cents) } else { String::new() }
+    }
+}
+
+/// On-chain provenance for a crypto entry (from crypto_provenance).
+#[derive(Debug, Clone)]
+pub struct CryptoProvenance {
+    pub tx_hash: String,
+    pub chain: String,
+    pub explorer_url: String,
+    pub verified: bool,
+    pub verify_error: Option<String>,
+    pub counterparty: Option<String>,
+    pub symbol: Option<String>,
+    pub direction: Option<String>,
+    pub from_address: Option<String>,
+    pub to_address: Option<String>,
+}
+
+impl CryptoProvenance {
+    fn addr_url(&self, addr: &Option<String>) -> Option<String> {
+        let a = addr.as_ref()?;
+        let base = match self.chain.as_str() {
+            "bsc" => "https://bscscan.com/address/",
+            _ => "https://etherscan.io/address/",
+        };
+        Some(format!("{base}{a}"))
+    }
+    pub fn from_url(&self) -> Option<String> { self.addr_url(&self.from_address) }
+    pub fn to_url(&self) -> Option<String> { self.addr_url(&self.to_address) }
+}
+
+/// A vendor/counterparty resolved from the address book.
+#[derive(Debug, Clone)]
+pub struct VendorLink {
+    pub address: String,
+    pub name: String,
+    pub kind: String,
+    pub account_code: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EntryDetail {
+    pub id: Uuid,
+    pub date: NaiveDate,
+    pub memo: String,
+    pub memo_display: String,
+    pub reference: Option<String>,
+    pub source: Option<String>,
+    pub is_void: bool,
+    pub lines: Vec<EntryLineRow>,
+    pub crypto: Option<CryptoProvenance>,
+    pub vendor: Option<VendorLink>,
+    /// Where this entry came from (entry_sources): statement | plaid | wise | reclass | crypto | manual.
+    pub source_kind: Option<String>,
+    /// Source statement file name, when the entry came from a parsed/uploaded statement.
+    pub source_file: Option<String>,
+    /// Money flowed from here (the credited account / sending wallet).
+    pub from: Option<Endpoint>,
+    /// …to here (the debited account / receiving wallet).
+    pub to: Option<Endpoint>,
+}
+
+impl EntryDetail {
+    pub fn total_debits(&self) -> String {
+        format_cents(self.lines.iter().filter(|l| l.amount_cents > 0).map(|l| l.amount_cents).sum())
+    }
+    pub fn total_credits(&self) -> String {
+        format_cents(self.lines.iter().filter(|l| l.amount_cents < 0).map(|l| -l.amount_cents).sum())
+    }
+    pub fn source_label(&self) -> &str {
+        self.source.as_deref().unwrap_or("manual")
+    }
+}
+
+/// Full detail for one journal entry: all lines, on-chain provenance (if a crypto
+/// entry), the source statement file (if imported), and the vendor (address book).
+pub async fn get_entry_detail(
+    pool: &PgPool,
+    company_id: Uuid,
+    entry_id: Uuid,
+) -> AppResult<Option<EntryDetail>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+
+    let hdr = sqlx::query(
+        "SELECT date, memo, reference, source::text, is_void
+         FROM journal_entries WHERE id = $1",
+    )
+    .bind(entry_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(h) = hdr else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let memo: String = h.get::<Option<String>, _>(1).unwrap_or_default();
+    let reference: Option<String> = h.get(2);
+    let source: Option<String> = h.get(3);
+
+    let line_rows = sqlx::query(
+        "SELECT jl.id, jl.account_id, a.account_number, a.name, jl.amount, jl.currency, jl.memo
+         FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id
+         WHERE jl.entry_id = $1 ORDER BY jl.amount DESC",
+    )
+    .bind(entry_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let lines: Vec<EntryLineRow> = line_rows
+        .into_iter()
+        .map(|r| EntryLineRow {
+            line_id: r.get(0),
+            account_id: r.get(1),
+            account_number: r.get(2),
+            account_name: r.get(3),
+            amount_cents: r.get(4),
+            currency: r.get(5),
+            memo: r.get(6),
+        })
+        .collect();
+
+    let crypto = sqlx::query(
+        "SELECT tx_hash, chain, explorer_url, verified, verify_error, counterparty, symbol,
+                direction, from_address, to_address
+         FROM crypto_provenance WHERE entry_id = $1",
+    )
+    .bind(entry_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .map(|r| CryptoProvenance {
+        tx_hash: r.get(0),
+        chain: r.get(1),
+        explorer_url: r.get(2),
+        verified: r.get(3),
+        verify_error: r.get(4),
+        counterparty: r.get(5),
+        symbol: r.get(6),
+        direction: r.get(7),
+        from_address: r.get(8),
+        to_address: r.get(9),
+    });
+
+    // Source provenance (statement file / plaid / wise / reclass / manual).
+    let (source_kind, source_file) = sqlx::query(
+        "SELECT source_kind, source_file FROM entry_sources WHERE entry_id = $1",
+    )
+    .bind(entry_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .map(|r| (r.get::<String, _>(0).into(), r.get::<Option<String>, _>(1)))
+    .unwrap_or((None, None));
+
+    // Vendor: prefer the crypto counterparty; otherwise the first 0x address in the memo.
+    let vendor_addr = crypto
+        .as_ref()
+        .and_then(|c| c.counterparty.clone())
+        .or_else(|| first_wallet_address(&memo));
+    let mut vendor = if let Some(addr) = vendor_addr {
+        sqlx::query(
+            "SELECT address, name, kind, account_code FROM address_labels
+             WHERE address = lower($1)",
+        )
+        .bind(&addr)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(|r| VendorLink {
+            address: r.get(0),
+            name: r.get(1),
+            kind: r.get(2),
+            account_code: r.get(3),
+        })
+    } else {
+        None
+    };
+
+    // Fall back to the structured vendor (journal_lines.vendor_id → vendors master).
+    if vendor.is_none() {
+        vendor = sqlx::query(
+            "SELECT v.name, COALESCE(v.vendor_type,''), COALESCE(v.default_account_code,'')
+             FROM journal_lines jl JOIN vendors v ON v.id = jl.vendor_id
+             WHERE jl.entry_id = $1 AND jl.vendor_id IS NOT NULL
+             LIMIT 1",
+        )
+        .bind(entry_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(|r| VendorLink {
+            address: String::new(),
+            name: r.get(0),
+            kind: r.get(1),
+            account_code: r.get(2),
+        });
+    }
+
+    tx.commit().await?;
+
+    // Fall back to the upload: reference if entry_sources has no file.
+    let source_file = source_file.or_else(|| {
+        reference
+            .as_deref()
+            .and_then(|r| r.strip_prefix("upload:"))
+            .map(|s| s.to_string())
+    });
+
+    // From → To: money flows from the credited line (most negative) to the debited
+    // line (most positive). For crypto entries, attach the full sending/receiving
+    // wallet + an explorer address link.
+    let addr_base = crypto.as_ref().map(|c| {
+        if c.chain == "bsc" { "https://bscscan.com/address/" } else { "https://etherscan.io/address/" }
+    });
+    fn endpoint(l: &EntryLineRow, wallet: Option<String>, base: Option<&str>) -> Endpoint {
+        let wallet_url = match (&wallet, base) {
+            (Some(w), Some(b)) => Some(format!("{b}{w}")),
+            _ => None,
+        };
+        Endpoint {
+            account_id: l.account_id,
+            account_number: l.account_number.clone(),
+            account_name: l.account_name.clone(),
+            wallet,
+            wallet_name: None, // filled by the handler from the address book
+            wallet_url,
+        }
+    }
+    let from = lines
+        .iter()
+        .min_by_key(|l| l.amount_cents)
+        .map(|l| endpoint(l, crypto.as_ref().and_then(|c| c.from_address.clone()), addr_base));
+    let to = lines
+        .iter()
+        .max_by_key(|l| l.amount_cents)
+        .map(|l| endpoint(l, crypto.as_ref().and_then(|c| c.to_address.clone()), addr_base));
+
+    Ok(Some(EntryDetail {
+        id: entry_id,
+        date: h.get(0),
+        memo_display: memo.clone(),
+        memo,
+        reference,
+        source,
+        is_void: h.get(4),
+        lines,
+        crypto,
+        vendor,
+        source_kind,
+        source_file,
+        from,
+        to,
+    }))
+}
+
+/// First `0x…` hex wallet address (≥12 chars) found in a string, lowercased.
+fn first_wallet_address(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i + 2 < s.len() {
+        if b[i] == b'0' && (b[i + 1] | 0x20) == b'x' {
+            let mut j = i + 2;
+            while j < s.len() && b[j].is_ascii_hexdigit() {
+                j += 1;
+            }
+            if j - i >= 12 {
+                return Some(s[i..j].to_lowercase());
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    None
 }
 
 /// Resolve the user's first company membership.
