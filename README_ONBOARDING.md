@@ -22,12 +22,12 @@ hard-code "Arbach" into the system — treat owner/company as data.
 ---
 ## 2. PLATFORM ARCHITECTURE (generic — applies to ANY owner)
 - **Stack:** Rust/axum web app + `agentd` (per-company persistent Claude session) + Postgres DB **`accountir_cloud`**. Served `127.0.0.1:9877` → https://accounting.apix.us. Binary `/usr/local/bin/accountir-cloud`. systemd `accountir-cloud.service`.
-- **Source:** `/home/ubuntu/repos/accountir-cloud`. Web app code is under `cloud/` (Rust/axum); HTML in `cloud/templates/*.html`.
+- **Source:** `/home/ubuntu/repos/accountir` (single repo/folder, branch `main`). The local accounting engine is at the repo root (`src/`, `core/`); the **web app is under `cloud/`** (Rust/axum); HTML in `cloud/templates/*.html`. _(The cloud app used to live in a separate `accountir-cloud` worktree on branch `plaid-statements-parsing`; that was merged into `main` and consolidated into this one folder.)_
 
 ### Build & deploy UI / code changes  ⚠ READ THIS BEFORE EDITING THE UI
 Templates use **askama (compile-time)** — the `.html` files and their inline CSS/JS are **compiled INTO the binary**. There is **no runtime templates/static directory**: editing a `.html` and restarting does **NOTHING**. **Every UI change requires a full rebuild + reinstall + restart.** The deploy procedure for *any* code or UI change:
 ```bash
-cd /home/ubuntu/repos/accountir-cloud/cloud   # ⚠ the cargo WORKSPACE EXCLUDES `cloud`
+cd /home/ubuntu/repos/accountir/cloud         # ⚠ the cargo WORKSPACE EXCLUDES `cloud`
 cargo build --release                          #    (members=[".","core"]) — root `cargo build` will NOT build the app
 sudo install -m755 target/release/accountir-cloud /usr/local/bin/
 sudo systemctl restart accountir-cloud
