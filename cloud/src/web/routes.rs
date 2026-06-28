@@ -104,6 +104,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/documents/{id}/download", get(file_download))
         .route("/app/documents/{id}/delete", post(file_delete))
         .route("/app/documents/{id}/year", post(document_set_year))
+        .route("/app/documents/{id}/lock", post(document_set_lock))
         .route("/app/wise", get(wise_view))
         .route("/app/wise/sync", post(wise_sync))
         // Back-compat: the store was formerly the "Files" tab.
@@ -2305,7 +2306,7 @@ async fn transactions_list(
         .unwrap_or_default();
     // Shorten wallet addresses and apply address-book names in the displayed memo.
     let labels: std::collections::HashMap<String, String> =
-        queries::list_address_labels(&state.pool, company_id)
+        queries::list_address_labels(&state.pool, company_id, None)
             .await
             .unwrap_or_default()
             .into_iter()
@@ -3357,8 +3358,10 @@ struct DocumentsTpl {
     total: usize,
     all_years: Vec<String>,
     all_categories: Vec<String>,
+    all_tags: Vec<String>,
     selected_year: String,
     selected_category: String,
+    selected_tag: String,
     search: String,
 }
 
@@ -3366,6 +3369,7 @@ struct DocumentsTpl {
 struct DocFilter {
     year: Option<String>,
     category: Option<String>,
+    tag: Option<String>,
     q: Option<String>,
 }
 
@@ -3406,9 +3410,13 @@ async fn documents_list(
     let mut all_categories: Vec<String> = files.iter().map(|r| r.category.clone()).collect();
     all_categories.sort();
     all_categories.dedup();
+    let mut all_tags: Vec<String> = files.iter().flat_map(|r| r.tags.clone()).collect();
+    all_tags.sort();
+    all_tags.dedup();
 
     let sel_year = f.year.unwrap_or_default();
     let sel_cat = f.category.unwrap_or_default();
+    let sel_tag = f.tag.unwrap_or_default();
     let search = f.q.unwrap_or_default();
     let needle = search.trim().to_lowercase();
 
@@ -3416,6 +3424,7 @@ async fn documents_list(
         let yr = r.doc_year.map(|y| y.to_string()).unwrap_or_else(|| "Undated".to_string());
         (sel_year.is_empty() || yr == sel_year)
             && (sel_cat.is_empty() || r.category == sel_cat)
+            && (sel_tag.is_empty() || r.tags.iter().any(|t| t == &sel_tag))
             && (needle.is_empty() || r.filename.to_lowercase().contains(&needle))
     }).collect();
     let total = filtered.len();
@@ -3428,8 +3437,10 @@ async fn documents_list(
         total,
         all_years,
         all_categories,
+        all_tags,
         selected_year: sel_year,
         selected_category: sel_cat,
+        selected_tag: sel_tag,
         search,
     })
 }
@@ -3497,6 +3508,28 @@ async fn document_set_year(
     };
     let year = form.doc_year.trim().parse::<i32>().ok().filter(|y| (2000..=2099).contains(y));
     let _ = queries::update_company_file_year(&state.pool, company_id, id, year).await;
+    Redirect::to("/app/documents").into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct DocLockForm {
+    locked: Option<String>,
+}
+
+/// Lock or unlock a document. Locked files can't be deleted or have their year
+/// changed (enforced in the DB queries). `locked=true` locks, anything else unlocks.
+async fn document_set_lock(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+    axum::extract::Form(form): axum::extract::Form<DocLockForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c, None => return forbidden(),
+    };
+    let locked = form.locked.as_deref() == Some("true");
+    let _ = queries::set_company_file_locked(&state.pool, company_id, id, locked).await;
     Redirect::to("/app/documents").into_response()
 }
 
@@ -3635,19 +3668,33 @@ struct AddressBookTpl {
     flash_kind: Option<String>,
     nav: NavCtx,
     labels: Vec<queries::AddressLabelRow>,
+    search: String,
 }
 
-async fn address_book_list(State(state): State<AppState>, jar: CookieJar) -> Response {
+#[derive(serde::Deserialize, Default)]
+struct AddressBookFilter {
+    q: Option<String>,
+}
+
+async fn address_book_list(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(f): axum::extract::Query<AddressBookFilter>,
+) -> Response {
     let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
     let company_id = match active_company(&state, &jar, user.id).await {
         Some(c) => c, None => return forbidden(),
     };
-    let labels = queries::list_address_labels(&state.pool, company_id).await.unwrap_or_default();
+    let search = f.q.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let labels = queries::list_address_labels(&state.pool, company_id, search.as_deref())
+        .await
+        .unwrap_or_default();
     render(AddressBookTpl {
         user_email: Some(user.email),
         flash: None, flash_kind: None,
         nav: build_nav(&state, &jar, user.id).await,
         labels,
+        search: search.unwrap_or_default(),
     })
 }
 

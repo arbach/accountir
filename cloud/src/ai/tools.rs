@@ -488,7 +488,7 @@ async fn list_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
     };
     let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(50).min(200) as usize;
     // address book -> annotate any transaction whose memo names a known wallet
-    let labels = queries::list_address_labels(ctx.pool, ctx.company_id).await.unwrap_or_default();
+    let labels = queries::list_address_labels(ctx.pool, ctx.company_id, None).await.unwrap_or_default();
     match queries::list_transactions(ctx.pool, ctx.company_id, &filter).await {
         Ok(lines) => json!({
             "count": lines.len().min(limit),
@@ -519,7 +519,7 @@ async fn list_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
 }
 
 async fn list_address_labels_tool(ctx: &ToolContext<'_>) -> Value {
-    match queries::list_address_labels(ctx.pool, ctx.company_id).await {
+    match queries::list_address_labels(ctx.pool, ctx.company_id, None).await {
         Ok(labels) => json!({
             "count": labels.len(),
             "labels": labels.iter().map(|l| json!({

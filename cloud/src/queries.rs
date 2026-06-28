@@ -1294,6 +1294,8 @@ pub struct CompanyFileRow {
     pub size_bytes: i64,
     pub uploaded_at: String,
     pub doc_year: Option<i32>,
+    pub tags: Vec<String>,
+    pub locked: bool,
 }
 
 /// Files ordered for the Documents view: newest period/tax year first, unknown
@@ -1304,7 +1306,7 @@ pub async fn list_company_files(pool: &PgPool, company_id: Uuid) -> AppResult<Ve
     set_tenant(&mut tx, company_id).await?;
     let rows = sqlx::query(
         "SELECT id, category, filename, content_type, size_bytes,
-                to_char(uploaded_at, 'YYYY-MM-DD HH24:MI'), doc_year
+                to_char(uploaded_at, 'YYYY-MM-DD HH24:MI'), doc_year, tags, locked
          FROM company_files WHERE company_id = $1
          ORDER BY doc_year DESC NULLS LAST, category ASC, uploaded_at DESC",
     )
@@ -1322,8 +1324,31 @@ pub async fn list_company_files(pool: &PgPool, company_id: Uuid) -> AppResult<Ve
             size_bytes: r.get(4),
             uploaded_at: r.get(5),
             doc_year: r.get(6),
+            tags: r.get(7),
+            locked: r.get(8),
         })
         .collect())
+}
+
+/// Set or clear the lock on a document. Locked files cannot be deleted or have
+/// their year changed (enforced in those queries' WHERE clauses).
+pub async fn set_company_file_locked(
+    pool: &PgPool,
+    company_id: Uuid,
+    id: Uuid,
+    locked: bool,
+) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query("UPDATE company_files SET locked = $3 WHERE company_id = $1 AND id = $2")
+        .bind(company_id)
+        .bind(id)
+        .bind(locked)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Set (or clear, with None) the period/tax year a document pertains to.
@@ -1336,7 +1361,7 @@ pub async fn update_company_file_year(
     let mut conn = pool.acquire().await?;
     let mut tx = conn.begin().await?;
     set_tenant(&mut tx, company_id).await?;
-    sqlx::query("UPDATE company_files SET doc_year = $3 WHERE company_id = $1 AND id = $2")
+    sqlx::query("UPDATE company_files SET doc_year = $3 WHERE company_id = $1 AND id = $2 AND locked = false")
         .bind(company_id)
         .bind(id)
         .bind(doc_year)
@@ -1479,7 +1504,7 @@ pub async fn delete_company_file(
     let mut tx = conn.begin().await?;
     set_tenant(&mut tx, company_id).await?;
     let row: Option<(String,)> = sqlx::query_as(
-        "DELETE FROM company_files WHERE company_id = $1 AND id = $2 RETURNING stored_path",
+        "DELETE FROM company_files WHERE company_id = $1 AND id = $2 AND locked = false RETURNING stored_path",
     )
     .bind(company_id)
     .bind(id)
@@ -1503,15 +1528,25 @@ pub struct AddressLabelRow {
 pub async fn list_address_labels(
     pool: &PgPool,
     company_id: Uuid,
+    search: Option<&str>,
 ) -> AppResult<Vec<AddressLabelRow>> {
     let mut conn = pool.acquire().await?;
     let mut tx = conn.begin().await?;
     set_tenant(&mut tx, company_id).await?;
+    // $2 NULL => no filter; otherwise case-insensitive match on name/address/kind/note.
     let rows = sqlx::query(
         "SELECT id, address, name, kind, account_code, note
-         FROM address_labels WHERE company_id = $1 ORDER BY name ASC",
+         FROM address_labels
+         WHERE company_id = $1
+           AND ($2::text IS NULL
+                OR name ILIKE '%' || $2 || '%'
+                OR address ILIKE '%' || $2 || '%'
+                OR kind ILIKE '%' || $2 || '%'
+                OR note ILIKE '%' || $2 || '%')
+         ORDER BY name ASC",
     )
     .bind(company_id)
+    .bind(search)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;

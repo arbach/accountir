@@ -29,7 +29,7 @@
 
 <div class="card" style="margin-bottom: var(--gap);">
   <form method="get" action="/app/documents" class="filter-bar" style="display:flex; gap:12px; align-items:end; flex-wrap:wrap;"
-        onchange="if(window.saveFilters)saveFilters(this);">
+        onchange="if(window.saveFilters)saveFilters(this); this.submit();">
     <label class="field"><span class="label-text">Year</span>
       <select name="year">
         <option value="">All years</option>
@@ -44,6 +44,13 @@
         <option value="{{ c }}" {% if selected_category == c.as_str() %}selected{% endif %}>{{ c }}</option>
         {% endfor %}
       </select></label>
+    <label class="field"><span class="label-text">Tag</span>
+      <select name="tag">
+        <option value="">All tags</option>
+        {% for t in all_tags %}
+        <option value="{{ t }}" {% if selected_tag == t.as_str() %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select></label>
     <label class="field" style="flex:1; min-width:180px;"><span class="label-text">Search filename</span>
       <input type="text" name="q" value="{{ search }}" placeholder="text in filename"></label>
     <div><button type="submit" class="btn btn-primary">Apply</button>
@@ -52,7 +59,7 @@
 </div>
 
 <div class="card">
-  <div class="card-title">{{ total }} document{% if total != 1 %}s{% endif %}{% if !selected_year.is_empty() || !selected_category.is_empty() || !search.is_empty() %} (filtered){% endif %}</div>
+  <div class="card-title">{{ total }} document{% if total != 1 %}s{% endif %}{% if !selected_year.is_empty() || !selected_category.is_empty() || !selected_tag.is_empty() || !search.is_empty() %} (filtered){% endif %}</div>
   {% if groups.is_empty() %}
   <p class="muted" style="font-size:13px;">No documents stored yet. Upload statements or tax documents above.</p>
   {% else %}
@@ -63,8 +70,9 @@
     <table>
       <thead><tr>
         <th>File</th>
-        <th style="width:130px">Category</th>
-        <th class="num" style="width:100px">Size</th>
+        <th style="width:120px">Category</th>
+        <th style="width:200px">Tags</th>
+        <th class="num" style="width:90px">Size</th>
         <th style="width:120px">Year</th>
         <th style="width:140px">Uploaded</th>
         <th style="width:90px"></th>
@@ -74,20 +82,36 @@
         <tr>
           <td><a href="/app/documents/{{ f.id }}/download" target="_blank">{{ f.filename }}</a></td>
           <td><span class="badge">{{ f.category }}</span></td>
+          <td>{% if f.locked %}<span title="Locked — cannot be edited or deleted">🔒 </span>{% endif %}{% for t in f.tags %}<a href="/app/documents?tag={{ t }}" class="badge" style="text-decoration:none; margin:1px 2px; {% if t == "pending_mail" %}background:#fde68a; color:#92400e;{% else if t == "filed" %}background:#bbf7d0; color:#166534;{% endif %}">{{ t }}</a>{% endfor %}</td>
           <td class="num">{{ f.size_bytes / 1024 }} KB</td>
           <td>
+            {% if f.locked %}
+              {% match f.doc_year %}{% when Some with (y) %}{{ y }}{% when None %}—{% endmatch %}
+            {% else %}
             <form method="post" action="/app/documents/{{ f.id }}/year" style="display:flex; gap:4px;">
               <input type="number" name="doc_year" min="2000" max="2099"
                 {% match f.doc_year %}{% when Some with (y) %}value="{{ y }}"{% when None %}placeholder="—"{% endmatch %}
                 style="width:64px; padding:2px 4px; font-size:12px;">
               <button class="btn btn-ghost" style="padding:2px 8px; font-size:12px;">Set</button>
             </form>
+            {% endif %}
           </td>
           <td class="muted" style="font-size:12px;">{{ f.uploaded_at }}</td>
           <td>
+            {% if f.locked %}
+            <form method="post" action="/app/documents/{{ f.id }}/lock" style="display:inline;" onsubmit="return confirm('Unlock this document so it can be edited or deleted again?')">
+              <input type="hidden" name="locked" value="false">
+              <button class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" title="Unlock">🔒 Unlock</button>
+            </form>
+            {% else %}
+            <form method="post" action="/app/documents/{{ f.id }}/lock" style="display:inline;">
+              <input type="hidden" name="locked" value="true">
+              <button class="btn btn-ghost" style="padding:2px 8px; font-size:12px;" title="Lock so it can't be changed or deleted">Lock</button>
+            </form>
             <form method="post" action="/app/documents/{{ f.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this document?')">
               <button class="btn btn-danger" style="padding:2px 10px; font-size:12px;">Delete</button>
             </form>
+            {% endif %}
           </td>
         </tr>
       {% endfor %}

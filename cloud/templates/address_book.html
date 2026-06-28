@@ -36,9 +36,18 @@
 </div>
 
 <div class="card">
-  <div class="card-title">{{ labels.len() }} labeled {% if labels.len() == 1 %}address{% else %}addresses{% endif %}</div>
+  <div class="card-title">{{ labels.len() }} {% if !search.is_empty() %}matching {% endif %}labeled {% if labels.len() == 1 %}address{% else %}addresses{% endif %}</div>
+  <form method="get" action="/app/address-book" style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+    <input type="text" name="q" value="{{ search }}" placeholder="Search name, address, kind or note…" style="flex:1; max-width:360px;">
+    <button type="submit" class="btn btn-secondary" style="padding:4px 14px;">Search</button>
+    {% if !search.is_empty() %}<a href="/app/address-book" class="btn btn-ghost" style="padding:4px 14px;">Clear</a>{% endif %}
+  </form>
   {% if labels.is_empty() %}
+  {% if !search.is_empty() %}
+  <p class="muted" style="font-size:13px;">No labels match “{{ search }}”. <a href="/app/address-book">Clear search</a>.</p>
+  {% else %}
   <p class="muted" style="font-size:13px;">No labels yet. Add a wallet address above.</p>
+  {% endif %}
   {% else %}
   <div class="table-wrap">
   <table>
