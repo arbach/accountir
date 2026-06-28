@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/logout", post(logout_submit))
         .route("/app/accounts", get(accounts_list).post(account_create))
         .route("/app/accounts/new", get(account_new))
+        .route("/app/vendors", get(vendors_list))
         .route(
             "/app/accounts/{id}/upload-statement",
             post(account_statement_upload)
@@ -751,6 +752,43 @@ async fn accounts_list(State(state): State<AppState>, jar: CookieJar) -> Respons
         flash_kind: None,
         nav: build_nav(&state, &jar, user.id).await,
         accounts,
+    })
+}
+
+#[derive(Template)]
+#[template(path = "vendors.html")]
+struct VendorsTpl {
+    user_email: Option<String>,
+    flash: Option<String>,
+    flash_kind: Option<String>,
+    nav: NavCtx,
+    vendors: Vec<queries::VendorRow>,
+    total_booked: String,
+    missing_w8: usize,
+}
+
+async fn vendors_list(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let vendors = queries::list_vendors_with_totals(&state.pool, company_id)
+        .await
+        .unwrap_or_default();
+    let total_booked = queries::format_cents(vendors.iter().map(|v| v.booked_cents).sum());
+    let missing_w8 = vendors.iter().filter(|v| v.tx_count > 0 && !v.tax_form_on_file).count();
+    render(VendorsTpl {
+        user_email: Some(user.email),
+        flash: None,
+        flash_kind: None,
+        nav: build_nav(&state, &jar, user.id).await,
+        vendors,
+        total_booked,
+        missing_w8,
     })
 }
 

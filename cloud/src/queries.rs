@@ -812,6 +812,69 @@ pub async fn list_transactions(
         .collect())
 }
 
+// ── Vendors (master list + per-company booked totals from the ledger) ──
+#[derive(Debug, Clone)]
+pub struct VendorRow {
+    pub id: Uuid,
+    pub name: String,
+    pub country: String,
+    pub tax_form: String,
+    pub tax_form_on_file: bool,
+    pub contract_on_file: bool,
+    pub default_account_code: String,
+    pub booked_cents: i64,
+    pub tx_count: i64,
+}
+
+impl VendorRow {
+    pub fn booked_display(&self) -> String {
+        format_cents(self.booked_cents)
+    }
+    pub fn w8_label(&self) -> &str {
+        if self.tax_form_on_file { "on file" } else { "MISSING" }
+    }
+}
+
+/// The vendors master joined with this company's booked totals (sum of non-void
+/// journal lines tagged to each vendor). Vendors with no activity here show $0.
+pub async fn list_vendors_with_totals(pool: &PgPool, company_id: Uuid) -> AppResult<Vec<VendorRow>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT v.id, v.name, COALESCE(v.country,''), COALESCE(v.required_tax_form,''),
+               COALESCE(v.tax_form_on_file,false), COALESCE(v.contract_on_file,false),
+               COALESCE(v.default_account_code,''),
+               COALESCE(SUM(CASE WHEN je.is_void = false THEN jl.amount ELSE 0 END), 0)::bigint AS booked,
+               COUNT(CASE WHEN je.is_void = false THEN jl.id END)::bigint AS n
+        FROM vendors v
+        LEFT JOIN journal_lines jl ON jl.vendor_id = v.id
+        LEFT JOIN journal_entries je ON je.id = jl.entry_id
+        GROUP BY v.id, v.name, v.country, v.required_tax_form,
+                 v.tax_form_on_file, v.contract_on_file, v.default_account_code
+        ORDER BY booked DESC, v.name ASC
+        "#,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| VendorRow {
+            id: r.get(0),
+            name: r.get(1),
+            country: r.get(2),
+            tax_form: r.get(3),
+            tax_form_on_file: r.get(4),
+            contract_on_file: r.get(5),
+            default_account_code: r.get(6),
+            booked_cents: r.get(7),
+            tx_count: r.get(8),
+        })
+        .collect())
+}
+
 // ── Entry detail (clickable transaction → full entry + provenance + vendor) ──
 
 #[derive(Debug, Clone)]

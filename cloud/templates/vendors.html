@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Vendors · {{ nav.active_company_name }}{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div>
+    <h1>Vendors</h1>
+    <div class="subtitle">{{ vendors.len() }} vendors · {{ total_booked }} booked to this company · {{ missing_w8 }} active without a tax form on file</div>
+  </div>
+</div>
+
+{% if vendors.is_empty() %}
+<div class="empty">
+  <h3>No vendors yet</h3>
+  <p>Vendors are the payees behind expense transactions. Tag a transaction's vendor on the Transactions page to populate this list.</p>
+</div>
+{% else %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Vendor</th>
+    <th style="width:150px">Country</th>
+    <th style="width:100px">Tax form</th>
+    <th style="width:120px">W-8 / W-9</th>
+    <th class="num" style="width:130px">Booked here</th>
+    <th class="num" style="width:70px">Txns</th>
+  </tr></thead>
+  <tbody>
+  {% for v in vendors %}
+    <tr>
+      <td><a href="/app/transactions?vendor={{ v.name }}" style="color:inherit;" title="View this vendor's transactions">{{ v.name }}</a></td>
+      <td class="muted">{{ v.country }}</td>
+      <td>{% if v.tax_form != "" %}<span class="badge">{{ v.tax_form }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{% if v.tax_form_on_file %}<span class="badge" style="background:#16351f;color:#7ee29a;">on file</span>{% else %}<span class="badge" style="background:#3a1d1d;color:#f0a3a3;">MISSING</span>{% endif %}</td>
+      <td class="num">{{ v.booked_display() }}</td>
+      <td class="num">{{ v.tx_count }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="muted" style="margin-top:10px;font-size:12px;">"Booked here" = total tagged to this vendor in the active company's ledger. "MISSING" flags an active vendor whose W-8BEN/W-8BEN-E/W-9 isn't yet on file (audit-readiness). Click a vendor to see their transactions.</p>
+{% endif %}
+{% endblock %}
