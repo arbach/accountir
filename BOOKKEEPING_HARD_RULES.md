@@ -49,6 +49,13 @@ rules are set. Last updated 2026-06 (this engagement).
 - **Hayat "Remote Deposit" / large check deposit > $10,000 = Service Revenue** (Mindwell pays by check). Under $10k = review.
 - A deposit that is a **check earned in a prior year** → **Prior Year Revenue (4100)**, with a note (e.g. "Jun-2025 $20k = check from 2024"; "Jun-2026 $30k = Service Revenue for 2025").
 
+## 4b. Broker → Company = LOAN to that company  ← (added 2026-06, owner)
+- **Any transfer from a broker (Fidelity/Robinhood) INTO a company (Maven/Hayat/etc.) = a LOAN to
+  that company** (credit Loan Payable). The funds are the owner's brokerage money lent in.
+- **Broker → Michael *personal* is NOT a company loan** — it's a withdrawal of his own funds or a
+  personal margin draw (no company liability).
+- The $200k Robinhood (Oct–Nov 2025) flowed **IN to Michael personal** — broker→personal, not a company loan.
+
 ## 6d. Brokerage — the loan STAYS; outflows are mostly distribution (clarifies §4)
 - **We still owe ~$180,000 to the brokerage (Fidelity loan) — it STAYS outstanding.** Brokerage
   transfers do NOT auto-net against it.
