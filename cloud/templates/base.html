@@ -386,6 +386,10 @@
     function iso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
     var now = new Date(), y = now.getFullYear(), m = now.getMonth(), q = Math.floor(m/3);
     var start=null, end=null, asof=null;
+    // Specific calendar year preset (e.g. "y2024" -> Jan 1–Dec 31 2024)
+    if (/^y\d{4}$/.test(v)) {
+      var yr=+v.slice(1); start=new Date(yr,0,1); end=new Date(yr,11,31);
+    } else
     switch (v) {
       case 'this_month':  start=new Date(y,m,1); end=now; break;
       case 'last_month':  start=new Date(y,m-1,1); end=new Date(y,m,0); break;
