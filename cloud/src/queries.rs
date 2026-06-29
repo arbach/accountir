@@ -763,7 +763,10 @@ pub async fn list_transactions(
         WHERE ($1::date IS NULL OR je.date >= $1)
           AND ($2::date IS NULL OR je.date <= $2)
           AND ($3::uuid IS NULL OR jl.account_id = $3)
-          AND ($3::uuid IS NOT NULL OR a.account_type IN ('asset', 'liability'))
+          -- Default view shows only the bank side (asset/liability) so Plaid entries don't
+          -- double-list. A specific account OR a vendor filter overrides that (a vendor is
+          -- tagged on the expense line, which would otherwise be excluded here).
+          AND ($3::uuid IS NOT NULL OR $10::text IS NOT NULL OR a.account_type IN ('asset', 'liability'))
           AND ($4::text IS NULL OR je.source::text = $4)
           AND ($5::text IS NULL OR je.memo ILIKE '%' || $5 || '%')
           AND ($6::boolean = true OR je.is_void = false)
