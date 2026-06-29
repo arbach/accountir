@@ -49,8 +49,13 @@ rules are set. Last updated 2026-06 (this engagement).
 - **Hayat "Remote Deposit" / large check deposit > $10,000 = Service Revenue** (Mindwell pays by check). Under $10k = review.
 - A deposit that is a **check earned in a prior year** → **Prior Year Revenue (4100)**, with a note (e.g. "Jun-2025 $20k = check from 2024"; "Jun-2026 $30k = Service Revenue for 2025").
 
-## 6d. Brokerage loan-payback (clarifies §4) — CHECK THE LOAN LEDGER FIRST
-- **We owe Fidelity $180,000 (Maven 2460 Loan Payable – Fidelity).** Money going to Fidelity = **LOAN PAYBACK (Dr 2460)** until that $180k is cleared, *then* distribution. Do not call it a "transfer/investment."
+## 6d. Brokerage — the loan STAYS; outflows are mostly distribution (clarifies §4)
+- **We still owe ~$180,000 to the brokerage (Fidelity loan) — it STAYS outstanding.** Brokerage
+  transfers do NOT auto-net against it.
+- **Most money OUT to Fidelity/Robinhood = DISTRIBUTION** (profits already distributed from the
+  entities, then personally invested) — **not** loan payback. Only a *specifically identified*
+  payback reduces the loan; default outflow = distribution / personal investment.
+- Net brokerage flow (2024–2026) = **$525,087 out − $400,000 in = $125,087 net out** (not $625k).
 
 ## 6b. Account naming
 - **Hayat revenue is "Service Revenue" (generic) — NEVER "Medical Revenue."** Hayat earns generic
