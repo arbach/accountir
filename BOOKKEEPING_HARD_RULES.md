@@ -34,6 +34,13 @@ rules are set. Last updated 2026-06 (this engagement).
 - **On-Chain LLC dissolved end-2023** → 2024 On-Chain activity rolls to **Maven**.
 - On-Chain contractors paid via **Maven's Chase** in 2023 are still **On-Chain's** expense (intercompany).
 
+## 5b. Intercompany transfers  ← (added 2026-06, owner)
+- **Any transfer between the owner's companies** (Maven · On-Chain · Hayat · SweetHome · Michael personal)
+  = **first a LOAN PAYBACK** (reduce the existing intercompany loan between those two parties, if one is
+  outstanding); **if none outstanding, it's a new LOAN.** Never income, expense, or distribution *between* companies.
+- **Maintain a clear intercompany debt ledger** (who owes whom) — every intercompany move updates it.
+  Use the `Due to/from <Entity>` / `Loan Payable/Receivable - <Entity>` accounts; net them per counterparty.
+
 ## 6. Distributions / owner
 - **All entities are S-corp or C-corp — there are NO "draws."** Owner money out = **S-corp distribution** / **C-corp dividend** / **shareholder loan** (per the loan ledger), never a "draw," never expense.
 - Confirmed: 2023 On-Chain $220k→Robinhood + $100k transfer = **distributions**.
