@@ -54,7 +54,7 @@ rules are set. Last updated 2026-06 (this engagement).
   that company** (credit Loan Payable). The funds are the owner's brokerage money lent in.
 - **Broker → Michael *personal* is NOT a company loan** — it's a withdrawal of his own funds or a
   personal margin draw (no company liability).
-- The $200k Robinhood (Oct–Nov 2025) flowed **IN to Michael personal** — broker→personal, not a company loan.
+- The $200k Robinhood (4×$50k, Oct–Nov 2025) = **Michael moving his OWN funds from Robinhood → his personal checking.** A personal brokerage↔checking transfer (Dr checking / Cr his Robinhood investment asset). **Nothing to do with Maven; not a loan; no P&L.**
 
 ## 6d. Brokerage — the loan STAYS; outflows are mostly distribution (clarifies §4)
 - **We still owe ~$180,000 to the brokerage (Fidelity loan) — it STAYS outstanding.** Brokerage
