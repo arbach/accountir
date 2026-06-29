@@ -824,11 +824,19 @@ pub struct VendorRow {
     pub default_account_code: String,
     pub booked_cents: i64,
     pub tx_count: i64,
+    pub first_paid: Option<NaiveDate>,
+    pub last_paid: Option<NaiveDate>,
 }
 
 impl VendorRow {
     pub fn booked_display(&self) -> String {
         format_cents(self.booked_cents)
+    }
+    pub fn first_paid_display(&self) -> String {
+        self.first_paid.map(|d| d.to_string()).unwrap_or_else(|| "—".into())
+    }
+    pub fn last_paid_display(&self) -> String {
+        self.last_paid.map(|d| d.to_string()).unwrap_or_else(|| "—".into())
     }
     pub fn w8_label(&self) -> &str {
         if self.tax_form_on_file { "on file" } else { "MISSING" }
@@ -837,25 +845,43 @@ impl VendorRow {
 
 /// The vendors master joined with this company's booked totals (sum of non-void
 /// journal lines tagged to each vendor). Vendors with no activity here show $0.
-pub async fn list_vendors_with_totals(pool: &PgPool, company_id: Uuid) -> AppResult<Vec<VendorRow>> {
+pub async fn list_vendors_with_totals(
+    pool: &PgPool,
+    company_id: Uuid,
+    sort: &str,
+) -> AppResult<Vec<VendorRow>> {
     let mut conn = pool.acquire().await?;
     let mut tx = conn.begin().await?;
     set_tenant(&mut tx, company_id).await?;
-    let rows = sqlx::query(
+    // Validated against a fixed allow-list, so it's safe to interpolate. NULLS LAST keeps
+    // never-paid vendors at the bottom regardless of direction.
+    let order_by = match sort {
+        "paid_asc" => "booked ASC NULLS FIRST, v.name ASC",
+        "name" => "v.name ASC",
+        "first_desc" => "first_paid DESC NULLS LAST, v.name ASC",
+        "first_asc" => "first_paid ASC NULLS LAST, v.name ASC",
+        "last_desc" => "last_paid DESC NULLS LAST, v.name ASC",
+        "last_asc" => "last_paid ASC NULLS LAST, v.name ASC",
+        "txns_desc" => "n DESC, v.name ASC",
+        _ => "booked DESC NULLS LAST, v.name ASC", // paid_desc (default)
+    };
+    let rows = sqlx::query(&format!(
         r#"
         SELECT v.id, v.name, COALESCE(v.country,''), COALESCE(v.required_tax_form,''),
                COALESCE(v.tax_form_on_file,false), COALESCE(v.contract_on_file,false),
                COALESCE(v.default_account_code,''),
                COALESCE(SUM(CASE WHEN je.is_void = false THEN jl.amount ELSE 0 END), 0)::bigint AS booked,
-               COUNT(CASE WHEN je.is_void = false THEN jl.id END)::bigint AS n
+               COUNT(CASE WHEN je.is_void = false THEN jl.id END)::bigint AS n,
+               MIN(CASE WHEN je.is_void = false THEN je.date END) AS first_paid,
+               MAX(CASE WHEN je.is_void = false THEN je.date END) AS last_paid
         FROM vendors v
         LEFT JOIN journal_lines jl ON jl.vendor_id = v.id
         LEFT JOIN journal_entries je ON je.id = jl.entry_id
         GROUP BY v.id, v.name, v.country, v.required_tax_form,
                  v.tax_form_on_file, v.contract_on_file, v.default_account_code
-        ORDER BY booked DESC, v.name ASC
+        ORDER BY {order_by}
         "#,
-    )
+    ))
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -871,6 +897,8 @@ pub async fn list_vendors_with_totals(pool: &PgPool, company_id: Uuid) -> AppRes
             default_account_code: r.get(6),
             booked_cents: r.get(7),
             tx_count: r.get(8),
+            first_paid: r.get(9),
+            last_paid: r.get(10),
         })
         .collect())
 }

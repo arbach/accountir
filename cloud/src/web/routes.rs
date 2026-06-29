@@ -765,9 +765,19 @@ struct VendorsTpl {
     vendors: Vec<queries::VendorRow>,
     total_booked: String,
     missing_w8: usize,
+    selected_sort: String,
 }
 
-async fn vendors_list(State(state): State<AppState>, jar: CookieJar) -> Response {
+#[derive(serde::Deserialize)]
+struct VendorSortQuery {
+    sort: Option<String>,
+}
+
+async fn vendors_list(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(q): axum::extract::Query<VendorSortQuery>,
+) -> Response {
     let user = match require_user(&state, &jar).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -776,7 +786,12 @@ async fn vendors_list(State(state): State<AppState>, jar: CookieJar) -> Response
         Some(c) => c,
         None => return forbidden(),
     };
-    let vendors = queries::list_vendors_with_totals(&state.pool, company_id)
+    let sort = match q.sort.as_deref() {
+        Some(s @ ("paid_asc" | "name" | "first_desc" | "first_asc" | "last_desc" | "last_asc"
+            | "txns_desc")) => s.to_string(),
+        _ => "paid_desc".to_string(),
+    };
+    let vendors = queries::list_vendors_with_totals(&state.pool, company_id, &sort)
         .await
         .unwrap_or_default();
     let total_booked = queries::format_cents(vendors.iter().map(|v| v.booked_cents).sum());
@@ -789,6 +804,7 @@ async fn vendors_list(State(state): State<AppState>, jar: CookieJar) -> Response
         vendors,
         total_booked,
         missing_w8,
+        selected_sort: sort,
     })
 }
 

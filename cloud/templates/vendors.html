@@ -17,12 +17,14 @@
 <div class="table-wrap">
 <table>
   <thead><tr>
-    <th>Vendor</th>
+    <th><a href="/app/vendors?sort=name" style="color:inherit;text-decoration:none;">Vendor{% if selected_sort == "name" %} ↑{% endif %}</a></th>
     <th style="width:150px">Country</th>
     <th style="width:100px">Tax form</th>
     <th style="width:120px">W-8 / W-9</th>
-    <th class="num" style="width:130px">Booked here</th>
-    <th class="num" style="width:70px">Txns</th>
+    <th class="num" style="width:130px"><a href="/app/vendors?sort={% if selected_sort == "paid_desc" %}paid_asc{% else %}paid_desc{% endif %}" style="color:inherit;text-decoration:none;">Total paid{% if selected_sort == "paid_desc" %} ↓{% else if selected_sort == "paid_asc" %} ↑{% endif %}</a></th>
+    <th class="num" style="width:70px"><a href="/app/vendors?sort=txns_desc" style="color:inherit;text-decoration:none;">Txns{% if selected_sort == "txns_desc" %} ↓{% endif %}</a></th>
+    <th class="num" style="width:120px"><a href="/app/vendors?sort={% if selected_sort == "first_desc" %}first_asc{% else %}first_desc{% endif %}" style="color:inherit;text-decoration:none;">Date started{% if selected_sort == "first_desc" %} ↓{% else if selected_sort == "first_asc" %} ↑{% endif %}</a></th>
+    <th class="num" style="width:120px"><a href="/app/vendors?sort={% if selected_sort == "last_desc" %}last_asc{% else %}last_desc{% endif %}" style="color:inherit;text-decoration:none;">Last payment{% if selected_sort == "last_desc" %} ↓{% else if selected_sort == "last_asc" %} ↑{% endif %}</a></th>
   </tr></thead>
   <tbody>
   {% for v in vendors %}
@@ -33,6 +35,8 @@
       <td>{% if v.tax_form_on_file %}<span class="badge" style="background:#16351f;color:#7ee29a;">on file</span>{% else %}<span class="badge" style="background:#3a1d1d;color:#f0a3a3;">MISSING</span>{% endif %}</td>
       <td class="num">{{ v.booked_display() }}</td>
       <td class="num">{{ v.tx_count }}</td>
+      <td class="num muted" style="text-align:left;">{{ v.first_paid_display() }}</td>
+      <td class="num muted" style="text-align:left;">{{ v.last_paid_display() }}</td>
     </tr>
   {% endfor %}
   </tbody>
