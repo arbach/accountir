@@ -83,7 +83,7 @@
   <h3 style="margin-top:0;">Journal lines</h3>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Account</th><th>Memo</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
+      <thead><tr><th>Account</th><th>Memo</th><th class="num" title="Debit — money IN for asset/bank accounts (money OUT for expense accounts)">Debit · IN</th><th class="num" title="Credit — money OUT for asset/bank accounts (money IN for income accounts)">Credit · OUT</th></tr></thead>
       <tbody>
       {% for l in entry.lines %}
         <tr>

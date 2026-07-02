@@ -81,8 +81,8 @@
       <th>Memo</th>
       <th style="width:150px">Vendor</th>
       <th style="width:240px">Account</th>
-      <th class="num" style="width:110px"><a href="#" class="tx-sort" data-field="amount" style="text-decoration:none;color:inherit;cursor:pointer;">Debit{% if selected_sort == "amount_desc" %} ↓{% else if selected_sort == "amount_asc" %} ↑{% endif %}</a></th>
-      <th class="num" style="width:110px">Credit</th>
+      <th class="num" style="width:110px" title="Debit — money IN for asset/bank accounts (money OUT for expense accounts)"><a href="#" class="tx-sort" data-field="amount" style="text-decoration:none;color:inherit;cursor:pointer;">Debit · IN{% if selected_sort == "amount_desc" %} ↓{% else if selected_sort == "amount_asc" %} ↑{% endif %}</a></th>
+      <th class="num" style="width:110px" title="Credit — money OUT for asset/bank accounts (money IN for income accounts)">Credit · OUT</th>
       <th style="width:80px">Source</th>
       <th style="width:90px"></th>
     </tr></thead>
