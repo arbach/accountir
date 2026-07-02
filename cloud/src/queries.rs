@@ -979,6 +979,33 @@ pub struct VendorLink {
     pub account_code: String,
 }
 
+/// A supporting document (receipt, invoice, contract, …) attached to an entry
+/// via `entry_documents` → `company_files`.
+#[derive(Debug, Clone)]
+pub struct EntryDocument {
+    pub file_id: Uuid,
+    pub filename: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    /// The link's classification (invoice, receipt, contract, other …).
+    pub doc_type: String,
+    pub note: Option<String>,
+}
+
+impl EntryDocument {
+    /// Human-readable file size, e.g. "12.3 KB".
+    pub fn size_display(&self) -> String {
+        let b = self.size_bytes as f64;
+        if b < 1024.0 {
+            format!("{} B", self.size_bytes)
+        } else if b < 1024.0 * 1024.0 {
+            format!("{:.1} KB", b / 1024.0)
+        } else {
+            format!("{:.1} MB", b / (1024.0 * 1024.0))
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EntryDetail {
     pub id: Uuid,
@@ -999,6 +1026,8 @@ pub struct EntryDetail {
     pub from: Option<Endpoint>,
     /// …to here (the debited account / receiving wallet).
     pub to: Option<Endpoint>,
+    /// Supporting documents attached to this entry (receipts, invoices, …).
+    pub documents: Vec<EntryDocument>,
 }
 
 impl EntryDetail {
@@ -1133,6 +1162,27 @@ pub async fn get_entry_detail(
         });
     }
 
+    // Supporting documents attached to this entry (entry_documents → company_files).
+    let documents: Vec<EntryDocument> = sqlx::query(
+        "SELECT cf.id, cf.filename, cf.content_type, cf.size_bytes, ed.doc_type, ed.note
+         FROM entry_documents ed JOIN company_files cf ON cf.id = ed.file_id
+         WHERE ed.entry_id = $1
+         ORDER BY ed.linked_at ASC",
+    )
+    .bind(entry_id)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .map(|r| EntryDocument {
+        file_id: r.get(0),
+        filename: r.get(1),
+        content_type: r.get(2),
+        size_bytes: r.get(3),
+        doc_type: r.get(4),
+        note: r.get(5),
+    })
+    .collect();
+
     tx.commit().await?;
 
     // Fall back to the upload: reference if entry_sources has no file.
@@ -1187,6 +1237,7 @@ pub async fn get_entry_detail(
         source_file,
         from,
         to,
+        documents,
     }))
 }
 

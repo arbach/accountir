@@ -79,6 +79,32 @@
 {% when None %}
 {% endmatch %}
 
+<div class="card" style="margin-bottom: var(--gap);">
+  <h3 style="margin-top:0;">Supporting documents{% if !entry.documents.is_empty() %} <span class="muted" style="font-weight:normal;">({{ entry.documents.len() }})</span>{% endif %}</h3>
+  {% if entry.documents.is_empty() %}
+  <div class="muted">No supporting documents attached to this transaction.</div>
+  {% else %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Document</th><th style="width:120px">Type</th><th style="width:90px" class="num">Size</th><th style="width:90px"></th></tr></thead>
+      <tbody>
+      {% for d in entry.documents %}
+        <tr>
+          <td>
+            <a href="/app/documents/{{ d.file_id }}/download" target="_blank" rel="noopener">{{ d.filename }}</a>
+            {% match d.note %}{% when Some with (n) %}<div class="muted" style="font-size:12px; margin-top:2px;">{{ n }}</div>{% when None %}{% endmatch %}
+          </td>
+          <td><span class="badge">{{ d.doc_type }}</span></td>
+          <td class="num">{{ d.size_display() }}</td>
+          <td><a href="/app/documents/{{ d.file_id }}/download" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">Download</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+
 <div class="card">
   <h3 style="margin-top:0;">Journal lines</h3>
   <div class="table-wrap">
