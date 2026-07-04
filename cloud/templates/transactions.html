@@ -1,6 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Transactions · Maven{% endblock %}
 {% block body %}
+<style>
+  .ms { position: relative; }
+  .ms-toggle { text-align: left; width: 100%; padding: 7px 10px; border: 1px solid var(--border-strong, #ccc);
+    border-radius: 6px; background: #fff; cursor: pointer; font-size: 13px; overflow: hidden;
+    white-space: nowrap; text-overflow: ellipsis; }
+  .ms-panel { position: absolute; z-index: 60; top: 100%; left: 0; min-width: 300px; max-width: 420px;
+    margin-top: 4px; background: #fff; border: 1px solid var(--border-strong, #bbb); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.14); padding: 8px; }
+  .ms-search { width: 100%; padding: 6px 8px; margin-bottom: 6px; border: 1px solid var(--border, #ddd);
+    border-radius: 6px; font-size: 13px; box-sizing: border-box; }
+  .ms-list { max-height: 260px; overflow-y: auto; }
+  .ms-opt { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px;
+    font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .ms-opt:hover { background: #f3f4f6; }
+  .ms-opt input { flex: 0 0 auto; }
+  .ms-all { border-bottom: 1px solid var(--border, #eee); margin-bottom: 4px; padding-bottom: 6px; }
+</style>
 <div class="page-header">
   <div><h1>Transactions</h1><div class="subtitle">{{ rows.len() }} lines · all journal-line activity</div></div>
 </div>
@@ -24,13 +41,23 @@
       </select></label>
     <label class="field"><span class="label-text">From</span><input type="date" name="start" value="{{ start_str }}"></label>
     <label class="field"><span class="label-text">To</span><input type="date" name="end" value="{{ end_str }}"></label>
-    <label class="field"><span class="label-text">Account(s)</span>
-      <select name="account_id" multiple size="6" title="Ctrl/Cmd-click to pick several accounts (e.g. all loan accounts). None selected = all accounts.">
-        {% for a in accounts %}
-        <option value="{{ a.id }}" {% if selected_account_ids.contains(a.id.to_string().as_str()) %}selected{% endif %}>{{ a.account_number }} — {{ a.name }}</option>
-        {% endfor %}
-      </select>
-    </label>
+    <div class="field ms" data-ms>
+      <span class="label-text">Account(s)</span>
+      <button type="button" class="ms-toggle" onclick="msOpen(this)" title="Pick one or more accounts (e.g. all loan accounts). All accounts = no filter.">All accounts ▾</button>
+      <div class="ms-panel" hidden>
+        <input type="text" class="ms-search" placeholder="Search accounts…" oninput="msFilter(this)" autocomplete="off">
+        <label class="ms-opt ms-all"><input type="checkbox" class="ms-allbox" onchange="msAll(this)"> <strong>All accounts</strong></label>
+        <div class="ms-list">
+          {% for a in accounts %}
+          <label class="ms-opt" data-txt="{{ a.account_number }} {{ a.name }}">
+            <input type="checkbox" name="account_id" value="{{ a.id }}" class="ms-cb"
+              {% if selected_account_ids.contains(a.id.to_string().as_str()) %}checked{% endif %} onchange="msSync(this)">
+            <span>{{ a.account_number }} — {{ a.name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
     <label class="field"><span class="label-text">Source</span>
       <select name="source">
         <option value="">All</option>
@@ -192,4 +219,44 @@
   })();
 </script>
 {% endif %}
+
+<script>
+  // Searchable multi-select for the Account(s) filter.
+  function msBox(el) { return el.closest('[data-ms]'); }
+  function msOpen(btn) {
+    var panel = btn.parentElement.querySelector('.ms-panel');
+    var open = !panel.hasAttribute('hidden');
+    document.querySelectorAll('.ms-panel').forEach(function (p) { p.setAttribute('hidden', ''); });
+    if (open) return;
+    panel.removeAttribute('hidden');
+    var s = panel.querySelector('.ms-search'); if (s) { s.value = ''; msFilter(s); s.focus(); }
+  }
+  function msFilter(input) {
+    var q = input.value.trim().toLowerCase();
+    input.closest('.ms-panel').querySelectorAll('.ms-list .ms-opt').forEach(function (o) {
+      o.style.display = (o.getAttribute('data-txt') || '').toLowerCase().indexOf(q) === -1 ? 'none' : '';
+    });
+  }
+  function msAll(box) {
+    var root = msBox(box);
+    if (box.checked) root.querySelectorAll('.ms-cb').forEach(function (cb) { cb.checked = false; });
+    msSync(box);
+  }
+  function msSync(el) {
+    var root = msBox(el);
+    var checked = Array.prototype.filter.call(root.querySelectorAll('.ms-cb'), function (cb) { return cb.checked; });
+    var label;
+    if (checked.length === 0) label = 'All accounts';
+    else if (checked.length === 1) label = checked[0].parentElement.querySelector('span').textContent;
+    else label = checked.length + ' accounts';
+    root.querySelector('.ms-toggle').textContent = label + ' ▾';
+    var all = root.querySelector('.ms-allbox'); if (all) all.checked = checked.length === 0;
+  }
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('[data-ms]')) {
+      document.querySelectorAll('.ms-panel').forEach(function (p) { p.setAttribute('hidden', ''); });
+    }
+  });
+  document.querySelectorAll('[data-ms]').forEach(function (root) { msSync(root.querySelector('.ms-toggle')); });
+</script>
 {% endblock %}

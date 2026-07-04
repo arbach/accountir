@@ -280,6 +280,26 @@
     .co-menu-item:hover { background: var(--row-hover); text-decoration: none; }
     .co-menu-item.active { font-weight: 600; cursor: default; }
 
+    /* ----- "More" nav dropdown (styled to match nav links, not the pill) ----- */
+    .nav-more { position: relative; }
+    .nav-more > summary {
+      list-style: none; cursor: pointer;
+      padding: 6px 12px; border-radius: var(--radius-sm);
+      color: var(--text-2); font-weight: 500; font-size: 14px;
+    }
+    .nav-more > summary::-webkit-details-marker { display: none; }
+    .nav-more > summary:hover { background: var(--row-hover); color: var(--text); }
+    .nav-more[open] > summary { background: var(--row-hover); color: var(--text); }
+    .nav-more .co-menu { left: 0; right: auto; min-width: 190px; }
+    /* subtle "Ask AI" accent on the right of the bar */
+    .ask-ai {
+      padding: 5px 12px; border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; color: var(--text);
+    }
+    .ask-ai:hover { background: var(--row-hover); text-decoration: none; }
+    /* current-page highlight (set by JS) */
+    .topbar nav a.here, .nav-more.here > summary { background: var(--row-hover); color: var(--text); font-weight: 600; }
+
     /* Print-only header inside report pages */
     .print-header { display: none; }
 
@@ -328,20 +348,31 @@
     <div class="brand"><a href="/app/dashboard">Maven</a></div>
     <nav>
       <a href="/app/dashboard">Dashboard</a>
-      <a href="/app/invoices">Sales</a>
       <a href="/app/transactions">Transactions</a>
-      <a href="/app/entries">Journal</a>
-      <a href="/app/accounts">Accounts</a>
-      <a href="/app/vendors">Vendors</a>
-      <a href="/app/banks">Banks</a>
-      <a href="/app/address-book">Address Book</a>
-      <a href="/app/documents">Documents</a>
-      <a href="/app/wise">Wise</a>
+      <a href="/app/invoices">Sales</a>
       <a href="/app/reports">Reports</a>
       <a href="/app/tax">Tax</a>
-      <a href="/app/chat">AI Chat</a>
+      <details class="nav-more">
+        <summary>More ▾</summary>
+        <div class="co-menu">
+          <div class="co-menu-section">
+            <a href="/app/entries" class="co-menu-item">Journal</a>
+            <a href="/app/accounts" class="co-menu-item">Accounts</a>
+            <a href="/app/banks" class="co-menu-item">Banks</a>
+          </div>
+          <div class="co-menu-section">
+            <a href="/app/vendors" class="co-menu-item">Vendors</a>
+            <a href="/app/address-book" class="co-menu-item">Address Book</a>
+          </div>
+          <div class="co-menu-section">
+            <a href="/app/documents" class="co-menu-item">Documents</a>
+            <a href="/app/wise" class="co-menu-item">Wise</a>
+          </div>
+        </div>
+      </details>
     </nav>
     <div class="meta">
+      <a href="/app/chat" class="ask-ai">Ask AI</a>
       {% if nav.all_companies.len() > 0 %}
       <details class="co-switcher">
         <summary>{{ nav.active_company_name }} <span class="caret">▾</span></summary>
@@ -818,5 +849,21 @@
   })();
   </script>
   {% endif %}
+  <script>
+  /* Highlight the current page in the top nav (no backend change needed). */
+  (function(){
+    var p = location.pathname;
+    var match = function(h){ return h && (p === h || p.indexOf(h + '/') === 0); };
+    document.querySelectorAll('.topbar nav > a[href]').forEach(function(a){
+      if (match(a.getAttribute('href'))) a.classList.add('here');
+    });
+    document.querySelectorAll('.nav-more .co-menu a[href]').forEach(function(a){
+      if (match(a.getAttribute('href'))) {
+        a.classList.add('active');
+        var d = a.closest('.nav-more'); if (d) d.classList.add('here');
+      }
+    });
+  })();
+  </script>
 </body>
 </html>
