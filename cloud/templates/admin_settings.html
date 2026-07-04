@@ -23,4 +23,89 @@
   </div>
 </form>
 </div>
+
+<style>
+{% for f in sig_fonts %}
+@font-face { font-family: "sig-{{ f.0 }}"; src: url("/app/fonts/{{ f.0 }}.ttf") format("truetype"); font-display: swap; }
+{% endfor %}
+.sig-preview { min-height: 92px; display: flex; align-items: center; padding: 8px 16px;
+  border: 1px dashed var(--border-strong); border-radius: 8px; background: #fff; overflow: hidden; }
+.sig-preview span { font-size: 46px; line-height: 1; color: #0f172a; white-space: nowrap; }
+.sig-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.sig-tab { cursor: pointer; }
+</style>
+
+<div class="card form-narrow" id="signature-card">
+  <h2 style="margin-top:0;">Owner signature</h2>
+  <p class="muted" style="font-size:13px; margin-top:-4px;">
+    Your signature is applied to approved tax forms before they are mailed. It belongs to you
+    (the owner) and is used for every entity you own — {{ owner_name }} in this case.
+  </p>
+
+  {% if sig_has %}
+  <div style="margin:12px 0;">
+    <div class="label-text" style="margin-bottom:6px;">Current signature
+      <span class="muted">· {{ sig_kind }} · saved {{ sig_updated_at }}</span></div>
+    <div class="sig-preview"><img src="/app/admin/signature.png?v={{ sig_updated_at }}" alt="signature"
+        style="max-height:80px; max-width:100%;"></div>
+    <form method="post" action="/app/admin/signature/clear" style="margin-top:8px;"
+          onsubmit="return confirm('Remove your saved signature?')">
+      <button type="submit" class="btn btn-ghost" style="color:#b91c1c;">Remove signature</button>
+    </form>
+  </div>
+  <hr style="border:none; border-top:1px solid var(--border); margin:16px 0;">
+  {% endif %}
+
+  <div class="sig-tabs">
+    <button type="button" class="btn btn-secondary sig-tab" data-tab="type" onclick="sigTab('type')">Type signature</button>
+    <button type="button" class="btn btn-ghost sig-tab" data-tab="upload" onclick="sigTab('upload')">Upload image</button>
+  </div>
+
+  <!-- Type signature -->
+  <form method="post" action="/app/admin/signature/typed" id="sig-type" class="stack-sm">
+    <label class="field"><span class="label-text">Your name</span>
+      <input type="text" name="text" id="sig-text" value="{{ sig_typed_text }}" maxlength="120" required
+             oninput="sigRender()"></label>
+    <label class="field"><span class="label-text">Handwriting style</span>
+      <select name="font" id="sig-font" onchange="sigRender()">
+        {% for f in sig_fonts %}
+        <option value="{{ f.0 }}" {% if sig_typed_font == f.0 %}selected{% endif %}>{{ f.1 }}</option>
+        {% endfor %}
+      </select></label>
+    <div class="label-text" style="margin-bottom:6px;">Preview</div>
+    <div class="sig-preview"><span id="sig-render">{{ sig_typed_text }}</span></div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save typed signature</button>
+    </div>
+  </form>
+
+  <!-- Upload image -->
+  <form method="post" action="/app/admin/signature/upload" id="sig-upload" enctype="multipart/form-data"
+        class="stack-sm" style="display:none;">
+    <label class="field"><span class="label-text">Signature image <span class="muted">(PNG or JPEG, transparent PNG best)</span></span>
+      <input type="file" name="file" accept="image/png,image/jpeg" required></label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Upload signature</button>
+    </div>
+  </form>
+</div>
+
+<script>
+  function sigTab(which) {
+    document.getElementById('sig-type').style.display = which === 'type' ? '' : 'none';
+    document.getElementById('sig-upload').style.display = which === 'upload' ? '' : 'none';
+    document.querySelectorAll('.sig-tab').forEach(function (b) {
+      var on = b.getAttribute('data-tab') === which;
+      b.className = 'btn sig-tab ' + (on ? 'btn-secondary' : 'btn-ghost');
+    });
+  }
+  function sigRender() {
+    var t = document.getElementById('sig-text').value || '';
+    var f = document.getElementById('sig-font').value;
+    var el = document.getElementById('sig-render');
+    el.textContent = t;
+    el.style.fontFamily = '"sig-' + f + '"';
+  }
+  sigRender();
+</script>
 {% endblock %}

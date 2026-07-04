@@ -59,6 +59,14 @@ pub fn router() -> Router<AppState> {
         .route("/app/admin/members/{user_id}/remove", post(admin_member_remove))
         .route("/app/admin/members/{user_id}/role", post(admin_member_role))
         .route("/app/admin/settings", get(admin_settings_view).post(admin_settings_save))
+        .route("/app/admin/signature/typed", post(signature_save_typed))
+        .route(
+            "/app/admin/signature/upload",
+            post(signature_upload).layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route("/app/admin/signature/clear", post(signature_clear))
+        .route("/app/admin/signature.png", get(signature_preview))
+        .route("/app/fonts/{key}", get(signature_font))
         .route("/app/admin/invitations", post(admin_invitation_create))
         .route("/accept-invite/{token}", get(accept_invite_view).post(accept_invite_submit))
         .route("/app/chat", get(chat_view))
@@ -90,6 +98,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/transactions", get(transactions_list))
         .route("/app/transactions/bulk-reclassify", post(transactions_bulk_reclassify))
         .route("/app/transactions/{line_id}/reclassify", post(transaction_reclassify))
+        .route("/app/transactions/{entry_id}/categorize", post(transaction_categorize))
         .route("/app/entries/{entry_id}/void", post(entry_void))
         .route("/app/entries/{entry_id}/unvoid", post(entry_unvoid))
         .route("/app/entries/{entry_id}", get(entry_detail_view))
@@ -244,6 +253,14 @@ struct AdminSettingsTpl {
     can_edit: bool,
     all_companies: Vec<queries::CompanyRow>,
     active_company_id: String,
+    // Owner signature (per user, shared across the owner's entities).
+    sig_fonts: Vec<(&'static str, &'static str)>,
+    sig_has: bool,
+    sig_kind: String,
+    sig_typed_text: String,
+    sig_typed_font: String,
+    sig_updated_at: String,
+    owner_name: String,
 }
 
 #[derive(Template)]
@@ -298,7 +315,9 @@ struct TransactionsTpl {
     rows: Vec<queries::TransactionLine>,
     accounts: Vec<queries::AccountRow>,
     sources: Vec<&'static str>,
-    selected_account_id: Option<String>,
+    selected_account_ids: std::collections::HashSet<String>,
+    categories: Vec<String>,
+    selected_category: Option<String>,
     selected_source: Option<String>,
     search: Option<String>,
     start_str: String,
@@ -1576,6 +1595,18 @@ async fn admin_settings_view(State(state): State<AppState>, jar: CookieJar) -> R
     let active_id = nav.active_company_id.clone();
     let active_name = nav.active_company_name.clone();
     let all = nav.all_companies.clone();
+    let sig = crate::signature::get_meta(&state.pool, user.id).await.ok().flatten();
+    // Prefill the typed signature with the owner's name (fallback: profile legal name / email).
+    let mut owner_name = user.name.clone().unwrap_or_default().trim().to_string();
+    if owner_name.is_empty() {
+        owner_name = crate::tax::get_profile(&state.pool, company_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|p| p.legal_name)
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| user.email.clone());
+    }
     render(AdminSettingsTpl {
         user_email: Some(user.email),
         flash: None,
@@ -1588,6 +1619,19 @@ async fn admin_settings_view(State(state): State<AppState>, jar: CookieJar) -> R
         can_edit,
         all_companies: all,
         active_company_id: active_id,
+        sig_fonts: crate::signature::FONTS.to_vec(),
+        sig_has: sig.is_some(),
+        sig_kind: sig.as_ref().map(|s| s.kind.clone()).unwrap_or_default(),
+        sig_typed_text: sig
+            .as_ref()
+            .and_then(|s| s.typed_text.clone())
+            .unwrap_or_else(|| owner_name.clone()),
+        sig_typed_font: sig
+            .as_ref()
+            .and_then(|s| s.typed_font.clone())
+            .unwrap_or_else(|| "GreatVibes".to_string()),
+        sig_updated_at: sig.as_ref().map(|s| s.updated_at.clone()).unwrap_or_default(),
+        owner_name,
     })
 }
 
@@ -1609,6 +1653,92 @@ async fn admin_settings_save(
     if !queries::role_can_admin(&role) { return forbidden(); }
     let _ = queries::update_company_settings(&state.pool, company_id, &req.name, &req.base_currency, req.fiscal_year_start_month).await;
     Redirect::to("/app/admin/settings").into_response()
+}
+
+// --- Owner signature (per user, shared across the owner's entities) ---------
+
+#[derive(Deserialize)]
+struct TypedSignatureForm {
+    text: String,
+    font: String,
+}
+
+/// Save a typed signature: render `text` in the chosen handwriting `font` to a PNG.
+async fn signature_save_typed(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Form(req): Form<TypedSignatureForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    match crate::signature::save_typed(&state.pool, user.id, &req.text, &req.font).await {
+        Ok(()) => Redirect::to("/app/admin/settings").into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+/// Upload a signature image (PNG/JPEG).
+async fn signature_upload(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("file") {
+            let content_type = field.content_type().unwrap_or("").to_string();
+            let Ok(bytes) = field.bytes().await else { continue };
+            return match crate::signature::save_image(&state.pool, user.id, &bytes, &content_type).await {
+                Ok(()) => Redirect::to("/app/admin/settings").into_response(),
+                Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+            };
+        }
+    }
+    (StatusCode::BAD_REQUEST, "no file uploaded").into_response()
+}
+
+async fn signature_clear(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let _ = crate::signature::clear(&state.pool, user.id).await;
+    Redirect::to("/app/admin/settings").into_response()
+}
+
+/// Serve the current owner's signature bitmap (for the settings preview).
+async fn signature_preview(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    match crate::signature::get_image(&state.pool, user.id).await {
+        Ok(Some((bytes, ct))) => (
+            [
+                (axum::http::header::CONTENT_TYPE, ct),
+                (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        _ => (StatusCode::NOT_FOUND, "no signature").into_response(),
+    }
+}
+
+/// Serve a handwriting font file so the browser can preview typed signatures live.
+async fn signature_font(
+    State(_state): State<AppState>,
+    axum::extract::Path(key): axum::extract::Path<String>,
+) -> Response {
+    let key = key.strip_suffix(".ttf").unwrap_or(&key);
+    if !crate::signature::is_valid_font(key) {
+        return (StatusCode::NOT_FOUND, "unknown font").into_response();
+    }
+    let dir = std::env::var("FONTS_DIR").unwrap_or_else(|_| "/usr/local/lib/accountir/fonts".to_string());
+    match std::fs::read(format!("{dir}/{key}.ttf")) {
+        Ok(bytes) => (
+            [
+                (axum::http::header::CONTENT_TYPE, "font/ttf".to_string()),
+                (axum::http::header::CACHE_CONTROL, "public, max-age=86400".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "font file missing").into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -2269,7 +2399,9 @@ async fn banks_sync(
 struct TxFilterQuery {
     start: Option<String>,
     end: Option<String>,
-    account_id: Option<String>,
+    /// Repeated `account_id=` params (multi-select). Empty = all accounts.
+    #[serde(default)]
+    account_id: Vec<String>,
     source: Option<String>,
     search: Option<String>,
     #[serde(rename = "type")]
@@ -2278,6 +2410,7 @@ struct TxFilterQuery {
     max_amount: Option<String>,
     sort: Option<String>,
     vendor: Option<String>,
+    category: Option<String>,
 }
 
 /// Prefix the address-book name in front of any known 0x… wallet address in a
@@ -2319,7 +2452,7 @@ fn parse_filter_amount_cents(s: &str) -> Option<i64> {
 async fn transactions_list(
     State(state): State<AppState>,
     jar: CookieJar,
-    axum::extract::Query(q): axum::extract::Query<TxFilterQuery>,
+    axum_extra::extract::Query(q): axum_extra::extract::Query<TxFilterQuery>,
 ) -> Response {
     let user = match require_user(&state, &jar).await {
         Ok(u) => u,
@@ -2331,9 +2464,12 @@ async fn transactions_list(
     };
     let start = q.start.as_deref().and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
     let end = q.end.as_deref().and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-    let account_id = q.account_id.as_deref().and_then(|s| {
-        if s.is_empty() { None } else { Uuid::parse_str(s).ok() }
-    });
+    let account_ids: Vec<Uuid> = q
+        .account_id
+        .iter()
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| Uuid::parse_str(s).ok())
+        .collect();
     let source = q.source.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
     let search = q.search.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
     let direction = q
@@ -2348,8 +2484,10 @@ async fn transactions_list(
         _ => "date_desc".to_string(),
     };
     let vendor = q.vendor.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
+    let category = q.category.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
     let filter = queries::TransactionFilter {
-        start, end, account_id,
+        start, end,
+        account_ids: account_ids.clone(),
         source: source.clone(),
         search: search.clone(),
         include_void: false,
@@ -2358,6 +2496,7 @@ async fn transactions_list(
         max_cents,
         sort: Some(sort.clone()),
         vendor: vendor.clone(),
+        category: category.clone(),
     };
     let mut rows = queries::list_transactions(&state.pool, company_id, &filter)
         .await
@@ -2376,6 +2515,7 @@ async fn transactions_list(
         }
     }
     let accounts = queries::list_accounts(&state.pool, company_id).await.unwrap_or_default();
+    let categories = queries::list_entry_categories(&state.pool, company_id).await.unwrap_or_default();
     render(TransactionsTpl {
         user_email: Some(user.email),
         flash: None,
@@ -2384,7 +2524,9 @@ async fn transactions_list(
         rows,
         accounts,
         sources: vec!["manual", "import", "recurring", "system", "plaid"],
-        selected_account_id: account_id.map(|u| u.to_string()),
+        selected_account_ids: account_ids.iter().map(|u| u.to_string()).collect(),
+        categories,
+        selected_category: category,
         selected_source: source,
         search,
         start_str: start.map(|d| d.to_string()).unwrap_or_default(),
@@ -2493,6 +2635,39 @@ async fn transaction_reclassify(
         tracing::error!(error = ?e, "reassign failed");
     }
     Redirect::to("/app/transactions").into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct CategorizeForm {
+    category: String,
+    #[serde(default)]
+    redirect: Option<String>,
+}
+
+/// Set (or clear, if blank) the user category tag on a transaction (entry).
+async fn transaction_categorize(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(entry_id): axum::extract::Path<String>,
+    Form(req): Form<CategorizeForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let entry_uuid = match Uuid::parse_str(&entry_id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad entry_id").into_response(),
+    };
+    if let Err(e) = queries::set_entry_category(&state.pool, company_id, entry_uuid, &req.category).await {
+        tracing::error!(error = ?e, "set category failed");
+    }
+    let dest = req.redirect.filter(|s| s.starts_with("/app/")).unwrap_or_else(|| "/app/transactions".to_string());
+    Redirect::to(&dest).into_response()
 }
 
 async fn transactions_bulk_reclassify(
