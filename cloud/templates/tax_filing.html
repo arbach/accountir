@@ -2,7 +2,7 @@
 {% block title %}Tax Filing · Maven{% endblock %}
 {% block body %}
 <div class="page-header">
-  <div><h1>Tax Filing</h1><div class="subtitle">Step-by-step: profile → books review → pull forms → complete → approve → mail</div></div>
+  <div><h1>Tax Filing</h1><div class="subtitle">Step-by-step: profile → books review → pull forms → complete → approve → sign → mail</div></div>
 </div>
 
 {% if !lob_configured %}
@@ -70,7 +70,18 @@
 </div>
 
 <div class="card" id="tax-forms-card">
-  <div class="card-title">Forms in the pipeline</div>
+  <div class="card-title" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+    <span>Forms in the pipeline</span>
+    {% if has_approved %}
+    {% if has_signature %}
+    <form method="post" action="/app/tax/sign-all" onsubmit="return confirm('Stamp your signature onto every approved form? Review the PDFs first.')" style="margin:0;">
+      <button type="submit" class="btn btn-primary" style="font-size:12px; padding:4px 12px;">✍ Sign all approved forms</button>
+    </form>
+    {% else %}
+    <a href="/app/admin/settings#signature-card" class="btn btn-secondary" style="font-size:12px; padding:4px 12px;" title="You need a saved signature before you can sign forms">Add your signature to sign →</a>
+    {% endif %}
+    {% endif %}
+  </div>
   {% if forms.is_empty() %}
   <p class="muted" style="font-size: 13px;">No forms yet. Ask the AI assistant to start your tax filing — it pulls the right IRS forms and completes them from the ledger.</p>
   {% else %}
@@ -84,7 +95,9 @@
         <td>{{ f.year }}</td>
         <td><span class="badge">{{ f.status }}</span></td>
         <td class="muted" style="font-size:12px;">
-          {% if f.lob_id.is_some() %}{{ f.lob_status.as_deref().unwrap_or("") }} · {{ f.lob_id.as_deref().unwrap_or("") }} · {{ f.mailed_display() }}{% else %}—{% endif %}
+          {% if f.lob_id.is_some() %}{{ f.lob_status.as_deref().unwrap_or("") }} · {{ f.lob_id.as_deref().unwrap_or("") }} · {{ f.mailed_display() }}
+          {% else if f.signed_at.is_some() %}✍ signed {{ f.signed_display() }}
+          {% else %}—{% endif %}
         </td>
         <td>
           <a href="/app/tax/forms/{{ f.id }}/pdf" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" target="_blank">View PDF</a>
@@ -125,7 +138,7 @@
       spotlight('tax-profile-card');
       var f = document.querySelector('#tax-profile-card input[name="legal_name"]');
       if (f) f.focus();
-    } else if (kind === 'approve') {
+    } else if (kind === 'approve' || kind === 'sign') {
       spotlight('tax-forms-card');
     } else if (kind === 'agent') {
       if (window.aiwAsk) {

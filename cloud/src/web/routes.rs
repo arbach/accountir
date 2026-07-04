@@ -90,6 +90,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/tax/forms/{id}/pdf", get(tax_form_pdf))
         .route("/app/tax/forms/{id}/approve", post(tax_form_approve))
         .route("/app/tax/forms/{id}/delete", post(tax_form_delete))
+        .route("/app/tax/sign-all", post(tax_sign_all))
         .route("/app/reports/tax-documents", get(tax_documents))
         .route("/app/reports/tax-documents/generate", post(tax_documents_generate))
         .route("/app/reports/tax-documents/print-all", get(tax_documents_print_all))
@@ -2120,14 +2121,28 @@ async fn banks_statements(
         }
     }
 
-    let parsed_count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM statement_lines WHERE company_id = $1 AND item_id = $2",
-    )
-    .bind(company_id)
-    .bind(item_uuid)
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or(0);
+    // Must run inside a tenant-scoped transaction: statement_lines is FORCE-RLS and
+    // set_config('app.company_id', …) is transaction-local, so querying the bare
+    // pool leaves current_company_id() NULL and always returns 0.
+    let parsed_count: i64 = {
+        let mut val = 0i64;
+        if let Ok(mut tx) = state.pool.begin().await {
+            if crate::store::event_store::set_tenant(&mut tx, company_id).await.is_ok() {
+                if let Ok(n) = sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM statement_lines WHERE company_id = $1 AND item_id = $2",
+                )
+                .bind(company_id)
+                .bind(item_uuid)
+                .fetch_one(&mut *tx)
+                .await
+                {
+                    val = n;
+                    let _ = tx.commit().await;
+                }
+            }
+        }
+        val
+    };
 
     let page = format!(
         "<!doctype html><html><head><meta charset=utf-8><title>Statements</title>\
@@ -2325,11 +2340,18 @@ async fn banks_unlink(
     };
     // Delete CASCADEs plaid_local_accounts + plaid_imported_transactions + plaid_staged.
     // We don't try to call /item/remove on Plaid here — best-effort local cleanup.
-    let _ = sqlx::query("DELETE FROM plaid_items WHERE id = $1 AND company_id = $2")
-        .bind(item_uuid)
-        .bind(company_id)
-        .execute(&state.pool)
-        .await;
+    // Must run under tenant context: plaid_items is FORCE-RLS and the tenant is set
+    // transaction-locally, so a bare-pool DELETE matches no rows and silently no-ops.
+    if let Ok(mut tx) = state.pool.begin().await {
+        if crate::store::event_store::set_tenant(&mut tx, company_id).await.is_ok() {
+            let _ = sqlx::query("DELETE FROM plaid_items WHERE id = $1 AND company_id = $2")
+                .bind(item_uuid)
+                .bind(company_id)
+                .execute(&mut *tx)
+                .await;
+            let _ = tx.commit().await;
+        }
+    }
     Redirect::to("/app/banks").into_response()
 }
 
@@ -2784,6 +2806,10 @@ struct TaxFilingTpl {
     profile_zip: String,
     forms: Vec<crate::tax::TaxFormRow>,
     lob_configured: bool,
+    /// Any form awaiting signature (status = approved).
+    has_approved: bool,
+    /// The owner has a signature saved in Settings.
+    has_signature: bool,
 }
 
 async fn tax_filing(State(state): State<AppState>, jar: CookieJar) -> Response {
@@ -2852,12 +2878,14 @@ async fn tax_filing(State(state): State<AppState>, jar: CookieJar) -> Response {
     } else if has_status("filled") {
         (5, "approve", "Next: review & approve the filled forms".to_string(), String::new())
     } else if has_status("approved") {
-        (6, "agent", "Next: AI mails the approved forms".to_string(), format!(
-            "Mail my approved {tax_year} tax forms for {company_name} via Lob (certified mail), \
+        (6, "sign", "Next: sign the approved forms".to_string(), String::new())
+    } else if has_status("signed") {
+        (7, "agent", "Next: AI mails the signed forms".to_string(), format!(
+            "Mail my signed {tax_year} tax forms for {company_name} via Lob (certified mail), \
              and confirm the tracking details."
         ))
     } else if all_mailed {
-        (7, "done", "Filing complete — all forms mailed".to_string(), String::new())
+        (8, "done", "Filing complete — all forms mailed".to_string(), String::new())
     } else {
         // Forms exist in mixed/unknown states; let the agent sort it out.
         (4, "agent", "Next: AI continues the filing".to_string(), format!(
@@ -2865,13 +2893,14 @@ async fn tax_filing(State(state): State<AppState>, jar: CookieJar) -> Response {
              Stop before approval — I will approve the filled forms myself."
         ))
     };
-    let step_defs: [(&'static str, &'static str); 6] = [
+    let step_defs: [(&'static str, &'static str); 7] = [
         ("Tax profile", "entity type, legal name, EIN, mailing address — form below"),
         ("Books review", "the AI runs the full accounting protocol (transfers, duplicates, credit cards) before any numbers are used"),
         ("Pull forms", "the AI downloads the official IRS PDFs it determines you need"),
         ("Complete", "the AI fills the forms from your ledger, line by line"),
         ("Approve", "you review each filled PDF below and click Approve — nothing mails without it"),
-        ("Mail", "approved forms go out via Lob, certified, with delivery tracking"),
+        ("Sign", "your signature (from Settings) is stamped onto every approved form"),
+        ("Mail", "signed forms go out via Lob, certified, with delivery tracking"),
     ];
     let tax_steps = step_defs
         .iter()
@@ -2904,6 +2933,8 @@ async fn tax_filing(State(state): State<AppState>, jar: CookieJar) -> Response {
         profile_city,
         profile_state,
         profile_zip,
+        has_approved: forms.iter().any(|f| f.status == "approved"),
+        has_signature: crate::signature::has_signature(&state.pool, user.id).await,
         forms,
         lob_configured: crate::tax::lob::configured(),
     })
@@ -3128,6 +3159,38 @@ async fn tax_form_approve(
     let _ = user;
     if let Ok(form_id) = Uuid::parse_str(&id) {
         let _ = crate::tax::approve_form(&state.pool, company_id, form_id).await;
+    }
+    Redirect::to("/app/tax").into_response()
+}
+
+/// Step 6 · Sign: stamp the owner's signature onto every approved form.
+async fn tax_sign_all(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    // The signature belongs to the owner (this user); it is shared across entities.
+    let Ok(Some((sig_png, _ct))) = crate::signature::get_image(&state.pool, user.id).await else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "No signature on file — add your signature in Settings before signing.",
+        )
+            .into_response();
+    };
+    let signer = user
+        .name
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| user.email.clone());
+    let forms = crate::tax::list_forms(&state.pool, company_id).await.unwrap_or_default();
+    for f in forms.iter().filter(|f| f.status == "approved") {
+        if let Err(e) = crate::tax::sign_form(&state.pool, company_id, f.id, &sig_png, &signer).await {
+            tracing::error!(error = %e, form = %f.id, "sign failed");
+        }
     }
     Redirect::to("/app/tax").into_response()
 }

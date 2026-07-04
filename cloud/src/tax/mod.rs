@@ -145,6 +145,8 @@ pub struct TaxFormRow {
     pub lob_id: Option<String>,
     pub lob_status: Option<String>,
     pub mailed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub signed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub signed_by: Option<String>,
 }
 
 impl TaxFormRow {
@@ -152,6 +154,13 @@ impl TaxFormRow {
         self.mailed_at
             .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
             .unwrap_or_default()
+    }
+    pub fn signed_display(&self) -> String {
+        match (&self.signed_at, &self.signed_by) {
+            (Some(t), Some(by)) => format!("{} · {}", by, t.format("%Y-%m-%d")),
+            (Some(t), None) => t.format("%Y-%m-%d").to_string(),
+            _ => String::new(),
+        }
     }
 }
 
@@ -166,11 +175,13 @@ fn form_row(r: sqlx::postgres::PgRow) -> TaxFormRow {
         lob_id: r.get(6),
         lob_status: r.get(7),
         mailed_at: r.get(8),
+        signed_at: r.get(9),
+        signed_by: r.get(10),
     }
 }
 
 const FORM_COLS: &str =
-    "id, year, form_code, title, status, file_path, lob_id, lob_status, mailed_at";
+    "id, year, form_code, title, status, file_path, lob_id, lob_status, mailed_at, signed_at, signed_by";
 
 pub async fn list_forms(pool: &PgPool, company_id: Uuid) -> AppResult<Vec<TaxFormRow>> {
     let mut conn = pool.acquire().await?;
@@ -218,6 +229,94 @@ async fn update_status(
 
 pub async fn approve_form(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<()> {
     update_status(pool, company_id, id, "approved").await
+}
+
+/// Where the signature image + date land on a form, in PDF points (origin
+/// bottom-left). `page` may be negative to count from the end (-1 = last page).
+/// These are best-effort defaults and are meant to be calibrated per form.
+struct SignAnchor {
+    page: i64,
+    x: f64,
+    y: f64,
+    w: f64,
+    date_x: f64,
+    date_y: f64,
+}
+
+fn signature_anchor(form_code: &str) -> SignAnchor {
+    // Coordinates in PDF points; calibrated against the official 2025 IRS PDFs.
+    // Personal returns sign in the "Sign Here" block on page 2.
+    if form_code.starts_with("f1040") || form_code == "il1040" {
+        return SignAnchor { page: 1, x: 74.0, y: 126.0, w: 145.0, date_x: 312.0, date_y: 130.0 };
+    }
+    // Business returns (1120-S, 1120, 1065, IL variants) sign on the "Signature
+    // of officer" line near the bottom of page 1.
+    if form_code.starts_with("f1120")
+        || form_code.starts_with("f1065")
+        || form_code.starts_with("il1120")
+    {
+        return SignAnchor { page: 0, x: 112.0, y: 86.0, w: 150.0, date_x: 360.0, date_y: 92.0 };
+    }
+    // Fallback: bottom-left of the last page (calibrate per form as needed).
+    SignAnchor { page: -1, x: 112.0, y: 86.0, w: 150.0, date_x: 360.0, date_y: 92.0 }
+}
+
+/// Stamp the owner's signature image + today's date onto an approved form and
+/// mark it signed. HARD GATE: the form must be user-approved first.
+pub async fn sign_form(
+    pool: &PgPool,
+    company_id: Uuid,
+    id: Uuid,
+    signature_png: &[u8],
+    signer: &str,
+) -> AppResult<()> {
+    let form = get_form(pool, company_id, id).await?.ok_or(AppError::NotFound)?;
+    if form.status == "mailed" {
+        return Err(AppError::BadRequest("form already mailed".into()));
+    }
+    if form.status != "approved" {
+        return Err(AppError::BadRequest(
+            "form must be approved before it can be signed".into(),
+        ));
+    }
+
+    // How many pages? Needed to resolve a from-the-end page index.
+    let listed = run_pdfform(&["list", &form.file_path]).map_err(AppError::BadRequest)?;
+    let pages = listed.get("pages").and_then(|p| p.as_i64()).unwrap_or(1).max(1);
+    let a = signature_anchor(&form.form_code);
+    let page = if a.page < 0 { (pages + a.page).max(0) } else { a.page.min(pages - 1) };
+
+    let sig_path = std::env::temp_dir().join(format!("taxsig-{id}.png"));
+    std::fs::write(&sig_path, signature_png).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    let today = chrono::Utc::now().date_naive().format("%m/%d/%Y").to_string();
+    let spec = json!({
+        "stamps": [{ "page": page, "x": a.x, "y": a.y, "w": a.w,
+                     "image": sig_path.to_str().unwrap_or_default() }],
+        "texts":  [{ "page": page, "x": a.date_x, "y": a.date_y, "text": today, "size": 10 }],
+    });
+    let spec_path = std::env::temp_dir().join(format!("taxsig-{id}.json"));
+    std::fs::write(&spec_path, serde_json::to_vec(&spec).unwrap_or_default())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    let out_path = format!("{}.signed.pdf", form.file_path);
+    let res = run_pdfform(&["stamp", &form.file_path, &out_path, spec_path.to_str().unwrap_or_default()]);
+    let _ = std::fs::remove_file(&sig_path);
+    let _ = std::fs::remove_file(&spec_path);
+    res.map_err(AppError::BadRequest)?;
+    std::fs::rename(&out_path, &form.file_path).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+
+    let mut conn = pool.acquire().await?;
+    let mut tx = sqlx::Acquire::begin(&mut conn).await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query(
+        "UPDATE tax_forms SET status = 'signed', signed_at = now(), signed_by = $2, updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(signer)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 pub async fn delete_form(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<()> {
@@ -379,9 +478,9 @@ pub async fn mail_form(
             form.lob_id.unwrap_or_default()
         )));
     }
-    if form.status != "approved" {
+    if form.status != "signed" {
         return Err(AppError::BadRequest(
-            "form is not approved yet — the user must review the PDF and click Approve on the Tax Filing page before it can be mailed"
+            "form is not signed yet — the user must review & Approve the PDF and then Sign it (step 6) on the Tax Filing page before it can be mailed"
                 .into(),
         ));
     }
