@@ -24,11 +24,10 @@
       </select></label>
     <label class="field"><span class="label-text">From</span><input type="date" name="start" value="{{ start_str }}"></label>
     <label class="field"><span class="label-text">To</span><input type="date" name="end" value="{{ end_str }}"></label>
-    <label class="field"><span class="label-text">Account</span>
-      <select name="account_id">
-        <option value="">All accounts</option>
+    <label class="field"><span class="label-text">Account(s)</span>
+      <select name="account_id" multiple size="6" title="Ctrl/Cmd-click to pick several accounts (e.g. all loan accounts). None selected = all accounts.">
         {% for a in accounts %}
-        <option value="{{ a.id }}" {% if selected_account_id.as_deref() == Some(a.id.to_string().as_str()) %}selected{% endif %}>{{ a.account_number }} — {{ a.name }}</option>
+        <option value="{{ a.id }}" {% if selected_account_ids.contains(a.id.to_string().as_str()) %}selected{% endif %}>{{ a.account_number }} — {{ a.name }}</option>
         {% endfor %}
       </select>
     </label>
@@ -37,6 +36,14 @@
         <option value="">All</option>
         {% for s in sources %}
         <option value="{{ s }}" {% if selected_source.as_deref() == Some(s) %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field"><span class="label-text">Category</span>
+      <select name="category" title="User category tag on the transaction (e.g. Loan).">
+        <option value="">All</option>
+        {% for c in categories %}
+        <option value="{{ c }}" {% if selected_category.as_deref() == Some(c.as_str()) %}selected{% endif %}>{{ c }}</option>
         {% endfor %}
       </select>
     </label>
@@ -73,6 +80,17 @@
 </div>
 {% else %}
 <div class="table-wrap">
+<datalist id="cat-list">
+  <option value="Loan"></option>
+  <option value="Transfer"></option>
+  <option value="Intercompany"></option>
+  <option value="Owner"></option>
+  <option value="Reimbursement"></option>
+  <option value="Revenue"></option>
+  <option value="Expense"></option>
+  <option value="Tax"></option>
+  {% for c in categories %}<option value="{{ c }}"></option>{% endfor %}
+</datalist>
 <form method="post" action="/app/transactions/bulk-reclassify">
   <table>
     <thead><tr>
@@ -80,6 +98,7 @@
       <th style="width:100px"><a href="#" class="tx-sort" data-field="date" style="text-decoration:none;color:inherit;cursor:pointer;">Date{% if selected_sort == "date_desc" %} ↓{% else if selected_sort == "date_asc" %} ↑{% endif %}</a></th>
       <th>Memo</th>
       <th style="width:150px">Vendor</th>
+      <th style="width:120px">Category</th>
       <th style="width:240px">Account</th>
       <th class="num" style="width:110px" title="Debit — money IN for asset/bank accounts (money OUT for expense accounts)"><a href="#" class="tx-sort" data-field="amount" style="text-decoration:none;color:inherit;cursor:pointer;">Debit · IN{% if selected_sort == "amount_desc" %} ↓{% else if selected_sort == "amount_asc" %} ↑{% endif %}</a></th>
       <th class="num" style="width:110px" title="Credit — money OUT for asset/bank accounts (money IN for income accounts)">Credit · OUT</th>
@@ -93,6 +112,11 @@
         <td class="num" style="text-align:left;">{{ t.date }}</td>
         <td><a href="/app/entries/{{ t.entry_id }}" style="color:inherit;text-decoration:none;" title="View transaction detail">{{ t.memo_display }}</a>{% if t.reference.is_some() %} <span class="muted" style="font-size:11px;">[{{ t.reference.as_deref().unwrap_or("") }}]</span>{% endif %}</td>
         <td>{% match t.vendor_name %}{% when Some with (vn) %}<a href="/app/transactions?vendor={{ vn }}" style="color:inherit;">{{ vn }}</a>{% when None %}<span class="muted">—</span>{% endmatch %}</td>
+        <td>
+          <form method="post" action="/app/transactions/{{ t.entry_id }}/categorize" style="display:inline;">
+            <input list="cat-list" name="category" value="{{ t.category.as_deref().unwrap_or("") }}" onchange="this.form.submit()" {% if t.is_void %}disabled{% endif %} placeholder="—" title="Type or pick a category, then blur to save" style="font-size:12px;padding:4px 6px;width:104px;">
+          </form>
+        </td>
         <td>
           <form method="post" action="/app/transactions/{{ t.line_id }}/reclassify" style="display:inline;">
             <select name="new_account_id" onchange="this.form.submit()" {% if t.is_void %}disabled{% endif %} style="font-size:12px; padding:4px 6px;">

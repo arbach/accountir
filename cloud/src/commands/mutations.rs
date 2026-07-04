@@ -78,6 +78,21 @@ pub async fn reassign_line(
         tx.commit().await?;
         return Ok(());
     }
+    // Guard: the target account must exist in THIS company. RLS scopes this
+    // SELECT to the tenant, so a foreign/unknown account id is rejected. Without
+    // it, the line could be repointed at an account invisible to every report —
+    // the line would silently vanish and the entry would no longer balance.
+    let target: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM accounts WHERE id = $1 AND is_active = true",
+    )
+    .bind(new_account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if target.is_none() {
+        return Err(AppError::BadRequest(
+            "unknown or inactive target account".into(),
+        ));
+    }
     let event = Event::JournalLineReassigned {
         entry_id: entry_id.to_string(),
         line_id: line_id.to_string(),

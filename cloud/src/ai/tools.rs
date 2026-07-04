@@ -432,7 +432,7 @@ async fn balance_sheet_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
             "net_income": dollars(r.net_income_cents),
             "total_assets": dollars(r.total_assets_cents),
             "total_liabilities": dollars(r.total_liab_cents),
-            "total_equity": dollars(r.total_equity_cents),
+            "total_equity": dollars(r.total_equity_cents + r.net_income_cents),
             "balanced": r.total_assets_cents == r.liab_plus_equity_cents(),
         }),
         Err(e) => json!({ "error": format!("{e}") }),
@@ -473,7 +473,7 @@ async fn list_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
     let filter = queries::TransactionFilter {
         start: input.get("start").and_then(|v| v.as_str()).and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
         end: input.get("end").and_then(|v| v.as_str()).and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
-        account_id,
+        account_ids: account_id.into_iter().collect(),
         source: None,
         search: input.get("search").and_then(|v| v.as_str()).map(str::to_string),
         include_void: false,
@@ -486,6 +486,7 @@ async fn list_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
         max_cents: input.get("max_amount").and_then(|v| v.as_f64()).map(|v| (v * 100.0).round() as i64),
         sort: input.get("sort").and_then(|v| v.as_str()).map(str::to_string),
         vendor: input.get("vendor").and_then(|v| v.as_str()).map(str::to_string),
+        category: input.get("category").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string),
     };
     let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(50).min(200) as usize;
     // address book -> annotate any transaction whose memo names a known wallet
@@ -691,7 +692,7 @@ async fn get_account_balance_tool(ctx: &ToolContext<'_>, input: &Value) -> Value
         let row: Option<(Uuid, String, i64)> = sqlx::query_as(
             r#"
             SELECT a.id, a.name,
-                   COALESCE(SUM(jl.amount), 0)::BIGINT
+                   COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jl.amount ELSE 0 END), 0)::BIGINT
             FROM accounts a
             LEFT JOIN journal_lines jl ON jl.account_id = a.id
             LEFT JOIN journal_entries je ON je.id = jl.entry_id AND je.is_void = false

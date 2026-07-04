@@ -63,6 +63,15 @@ pub async fn post_entry_in_tx<'a>(
             "lines must balance to zero (got {sum})"
         )));
     }
+    // Policy: all accounting is in USD. Reject any non-USD line at the ledger
+    // door — otherwise a foreign import would silently blend currencies in every
+    // report total (there is no FX conversion, by design). Fail loud, not silent.
+    if let Some(bad) = input.lines.iter().find(|l| !l.currency.eq_ignore_ascii_case("USD")) {
+        return Err(AppError::BadRequest(format!(
+            "only USD is supported; got line currency '{}'",
+            bad.currency
+        )));
+    }
 
     let entry_id = Uuid::new_v4();
     let lines: Vec<JournalLineData> = input

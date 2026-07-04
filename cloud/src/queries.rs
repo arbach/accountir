@@ -139,14 +139,16 @@ pub async fn trial_balance(
         SELECT a.account_number,
                a.name,
                a.account_type::text,
-               COALESCE(SUM(CASE WHEN jl.amount > 0 THEN jl.amount ELSE 0 END), 0)::BIGINT AS debit,
-               COALESCE(SUM(CASE WHEN jl.amount < 0 THEN -jl.amount ELSE 0 END), 0)::BIGINT AS credit
+               COALESCE(SUM(CASE WHEN je.id IS NOT NULL AND jl.amount > 0 THEN jl.amount ELSE 0 END), 0)::BIGINT AS debit,
+               COALESCE(SUM(CASE WHEN je.id IS NOT NULL AND jl.amount < 0 THEN -jl.amount ELSE 0 END), 0)::BIGINT AS credit
         FROM accounts a
         LEFT JOIN journal_lines jl ON jl.account_id = a.id
+        -- is_void gate in the ON clause: a voided line survives the LEFT JOIN with
+        -- je = NULL, so the sums must exclude rows where je.id IS NULL.
         LEFT JOIN journal_entries je ON je.id = jl.entry_id AND je.is_void = false
         WHERE a.is_active = true
         GROUP BY a.id, a.account_number, a.name, a.account_type
-        HAVING COALESCE(SUM(ABS(jl.amount)), 0) > 0
+        HAVING COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN ABS(jl.amount) ELSE 0 END), 0) > 0
         ORDER BY a.account_number ASC
         "#,
     )
@@ -253,7 +255,8 @@ async fn sum_by_account_type(
     start: Option<NaiveDate>,
 ) -> Result<std::collections::HashMap<String, i64>, sqlx::Error> {
     let q = r#"
-        SELECT a.account_type::text, COALESCE(SUM(jl.amount), 0)::BIGINT
+        SELECT a.account_type::text,
+               COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jl.amount ELSE 0 END), 0)::BIGINT
         FROM accounts a
         LEFT JOIN journal_lines jl ON jl.account_id = a.id
         LEFT JOIN journal_entries je ON je.id = jl.entry_id AND je.is_void = false
@@ -458,7 +461,11 @@ pub struct BalanceSheet {
 impl BalanceSheet {
     pub fn total_assets_display(&self) -> String { format_cents(self.total_assets_cents) }
     pub fn total_liab_display(&self) -> String { format_cents(self.total_liab_cents) }
-    pub fn total_equity_display(&self) -> String { format_cents(self.total_equity_cents) }
+    // "Total equity" must include current-year net income (shown as its own line
+    // just above), so it ties to the equity section and to Total liab. + equity.
+    pub fn total_equity_display(&self) -> String {
+        format_cents(self.total_equity_cents + self.net_income_cents)
+    }
     pub fn net_income_display(&self) -> String { format_cents(self.net_income_cents) }
     pub fn liab_plus_equity_cents(&self) -> i64 { self.total_liab_cents + self.total_equity_cents + self.net_income_cents }
     pub fn liab_plus_equity_display(&self) -> String { format_cents(self.liab_plus_equity_cents()) }
@@ -696,6 +703,8 @@ pub struct TransactionLine {
     pub is_void: bool,
     /// Vendor/payee from the vendors master (via journal_lines.vendor_id), if tagged.
     pub vendor_name: Option<String>,
+    /// User-assigned category tag on the entry (e.g. "Loan"), if set.
+    pub category: Option<String>,
 }
 
 impl TransactionLine {
@@ -715,7 +724,8 @@ impl TransactionLine {
 pub struct TransactionFilter {
     pub start: Option<NaiveDate>,
     pub end: Option<NaiveDate>,
-    pub account_id: Option<Uuid>,
+    /// Filter to one or more accounts. Empty = all accounts.
+    pub account_ids: Vec<Uuid>,
     pub source: Option<String>,
     pub search: Option<String>,
     pub include_void: bool,
@@ -728,6 +738,8 @@ pub struct TransactionFilter {
     pub sort: Option<String>,
     /// Filter to a vendor by name (substring match on the vendors master).
     pub vendor: Option<String>,
+    /// Filter to a user-assigned entry category (exact match), if set.
+    pub category: Option<String>,
 }
 
 pub async fn list_transactions(
@@ -755,18 +767,19 @@ pub async fn list_transactions(
         SELECT jl.id, je.id, je.date, je.memo, je.reference,
                a.id, a.account_number, a.name,
                jl.amount, jl.currency,
-               je.source::text, je.is_void, v.name
+               je.source::text, je.is_void, v.name, ec.category
         FROM journal_lines jl
         JOIN journal_entries je ON je.id = jl.entry_id
         JOIN accounts a ON a.id = jl.account_id
         LEFT JOIN vendors v ON v.id = jl.vendor_id
+        LEFT JOIN entry_categories ec ON ec.entry_id = je.id
         WHERE ($1::date IS NULL OR je.date >= $1)
           AND ($2::date IS NULL OR je.date <= $2)
-          AND ($3::uuid IS NULL OR jl.account_id = $3)
+          AND (cardinality($3::uuid[]) = 0 OR jl.account_id = ANY($3::uuid[]))
           -- Default view shows only the bank side (asset/liability) so Plaid entries don't
           -- double-list. A specific account OR a vendor filter overrides that (a vendor is
           -- tagged on the expense line, which would otherwise be excluded here).
-          AND ($3::uuid IS NOT NULL OR $10::text IS NOT NULL OR a.account_type IN ('asset', 'liability'))
+          AND (cardinality($3::uuid[]) > 0 OR $10::text IS NOT NULL OR a.account_type IN ('asset', 'liability'))
           AND ($4::text IS NULL OR je.source::text = $4)
           AND ($5::text IS NULL OR je.memo ILIKE '%' || $5 || '%')
           AND ($6::boolean = true OR je.is_void = false)
@@ -776,13 +789,14 @@ pub async fn list_transactions(
           AND ($8::bigint IS NULL OR abs(jl.amount) >= $8)
           AND ($9::bigint IS NULL OR abs(jl.amount) <= $9)
           AND ($10::text IS NULL OR v.name ILIKE '%' || $10 || '%')
+          AND ($11::text IS NULL OR ec.category = $11)
         ORDER BY {order_by}
         LIMIT 500
         "#,
     ))
     .bind(filter.start)
     .bind(filter.end)
-    .bind(filter.account_id)
+    .bind(&filter.account_ids)
     .bind(filter.source.as_deref())
     .bind(filter.search.as_deref())
     .bind(filter.include_void)
@@ -790,6 +804,7 @@ pub async fn list_transactions(
     .bind(filter.min_cents)
     .bind(filter.max_cents)
     .bind(filter.vendor.as_deref())
+    .bind(filter.category.as_deref())
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -811,8 +826,56 @@ pub async fn list_transactions(
             source: r.get(10),
             is_void: r.get(11),
             vendor_name: r.get(12),
+            category: r.get(13),
         })
         .collect())
+}
+
+/// Upsert (or clear, when `category` is empty) the category tag on an entry.
+pub async fn set_entry_category(
+    pool: &PgPool,
+    company_id: Uuid,
+    entry_id: Uuid,
+    category: &str,
+) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let cat = category.trim();
+    if cat.is_empty() {
+        sqlx::query("DELETE FROM entry_categories WHERE company_id = $1 AND entry_id = $2")
+            .bind(company_id)
+            .bind(entry_id)
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO entry_categories (company_id, entry_id, category) VALUES ($1, $2, $3)
+             ON CONFLICT (company_id, entry_id) DO UPDATE SET category = EXCLUDED.category, updated_at = now()",
+        )
+        .bind(company_id)
+        .bind(entry_id)
+        .bind(cat)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Distinct category tags used by a company (for filter dropdowns / suggestions).
+pub async fn list_entry_categories(pool: &PgPool, company_id: Uuid) -> AppResult<Vec<String>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT category FROM entry_categories WHERE company_id = $1 ORDER BY category",
+    )
+    .bind(company_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
 }
 
 // ── Vendors (master list + per-company booked totals from the ledger) ──

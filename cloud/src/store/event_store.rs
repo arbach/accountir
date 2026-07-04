@@ -36,6 +36,18 @@ pub async fn append_event<'a>(
     user_id: Uuid,
     event: &Event,
 ) -> Result<i64, StoreError> {
+    // Policy: all accounting is in USD. Enforce it universally at the single
+    // choke point every posting path funnels through (manual, invoice, Plaid,
+    // statement upload, AI). There is no FX conversion by design, so a non-USD
+    // line would silently corrupt every report total — reject it loudly instead.
+    if let Event::JournalEntryPosted { lines, .. } = event {
+        if let Some(bad) = lines.iter().find(|l| !l.currency.eq_ignore_ascii_case("USD")) {
+            return Err(StoreError::Payload(format!(
+                "only USD is supported; got line currency '{}'",
+                bad.currency
+            )));
+        }
+    }
     let timestamp: DateTime<Utc> = Utc::now();
     let timestamp_str = timestamp.to_rfc3339();
     let hash = compute_event_hash(event, &timestamp_str, &user_id.to_string())
