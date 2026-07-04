@@ -1,0 +1,12 @@
+{
+  "entity": "hayat", "form": "f1120s", "year": 2024, "manual": true,
+  "source": "FILED 2024 Form 1120-S — /tmp/y2024/2024/Hayat/...Filing.pdf. See tax/filed/FILED_RETURNS.md.",
+  "reconcile_target": 22097,
+  "reconcile_to": "f1120s line 21 ordinary business income = 22,097 (FILED)",
+  "_doc": "Hayat S-corp 2024 (short year 07/19/2024-12/31/2024) from the FILED return (books lumped +34,713 in acct 9999; book cleanup deferred). Filed: gross receipts 68,000 - deductions 45,903 (advertising 2,537 + other 43,366) = ordinary 22,097. K-1 box 1 = 22,097, 100% Michael.",
+  "filer": { "node_type": "general", "data": { "corporation_name": "Hayat Health LLC", "ein": "33-2127261", "shareholder_name": "Michael Arbach", "shareholder_tin": "813-14-0923", "ownership_percentage": 100 } },
+  "manual_forms": [
+    { "node_type": "f1120s", "data": { "line1a_gross_receipts": 68000, "line19_other_deductions": 45903 } }
+  ],
+  "accounts": {}
+}

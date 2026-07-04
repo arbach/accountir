@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "returnId": "00b59801-0557-4b40-9c5d-b9116685798b",
+    "year": 2024,
+    "formType": "f1120s",
+    "createdAt": "2026-06-28T22:10:28.191Z"
+  },
+  "inputs": {
+    "general": [
+      {
+        "id": "general_01",
+        "fields": {
+          "corporation_name": "SWEET HOME KC LLC",
+          "ein": "93-2942628",
+          "shareholder_name": "Michael Arbach",
+          "shareholder_tin": "813-14-0923",
+          "ownership_percentage": 100,
+          "is_officer_compensated": false
+        }
+      }
+    ],
+    "f8825": [
+      {
+        "id": "f8825_01",
+        "fields": {
+          "property_address": "SWEET HOME KC LLC - 11211 Norby Rd / 4023 E 115th / 13209 Fuller (aggregate, see NEEDS_DOC)",
+          "property_type": "residential",
+          "gross_rents": 34100,
+          "expense_taxes": 7491.43,
+          "expense_other": 2282.28,
+          "expense_repairs": 7930,
+          "expense_depreciation": 4862
+        }
+      }
+    ]
+  }
+}

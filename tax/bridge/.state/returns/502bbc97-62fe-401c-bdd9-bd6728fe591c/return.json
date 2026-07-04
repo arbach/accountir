@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "returnId": "502bbc97-62fe-401c-bdd9-bd6728fe591c",
+    "year": 2025,
+    "formType": "il1040",
+    "createdAt": "2026-06-28T23:39:25.293Z"
+  },
+  "inputs": {
+    "il1040": [
+      {
+        "id": "il1040_01",
+        "fields": {
+          "federal_agi": 225373.67,
+          "exemption_count": 5
+        }
+      }
+    ]
+  }
+}

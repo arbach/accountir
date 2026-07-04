@@ -1,0 +1,25 @@
+{
+  "year": 2025,
+  "forms": [
+    {
+      "node_type": "general",
+      "data": {
+        "corporation_name": "Hayat Health LLC",
+        "ein": "33-2127261",
+        "shareholder_name": "Michael Arbach",
+        "shareholder_tin": "813-14-0923",
+        "ownership_percentage": 100,
+        "is_officer_compensated": false,
+        "_flag": "NEEDS_REVIEW: officer reasonable-compensation \u2014 no W-2 officer comp booked for Michael; S-corp reasonable-comp rules may require some."
+      }
+    },
+    {
+      "node_type": "f1120s",
+      "data": {
+        "line1a_gross_receipts": 110000.0,
+        "line19_other_deductions": 136377.24,
+        "line12_taxes": 225.0
+      }
+    }
+  ]
+}

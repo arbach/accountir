@@ -1,0 +1,42 @@
+{
+  "year": 2024,
+  "forms": [
+    {
+      "node_type": "general",
+      "data": {
+        "corporation_name": "SWEET HOME KC LLC",
+        "ein": "93-2942628",
+        "shareholder_name": "Michael Arbach",
+        "shareholder_tin": "813-14-0923",
+        "ownership_percentage": 100
+      }
+    },
+    {
+      "node_type": "f8825",
+      "data": {
+        "property_address": "4023 E 115th, Kansas City MO 64137",
+        "property_type": "residential",
+        "gross_rents": 12000,
+        "expense_other": 7577
+      }
+    },
+    {
+      "node_type": "f8825",
+      "data": {
+        "property_address": "11211 Norby Rd, Kansas City MO 64137",
+        "property_type": "residential",
+        "gross_rents": 13200,
+        "expense_other": 8620
+      }
+    },
+    {
+      "node_type": "f8825",
+      "data": {
+        "property_address": "13209 Fuller Ave, Grandview MO 64030",
+        "property_type": "residential",
+        "gross_rents": 12000,
+        "expense_other": 5675
+      }
+    }
+  ]
+}

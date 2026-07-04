@@ -1,0 +1,124 @@
+{
+  "year": 2025,
+  "forms": [
+    {
+      "node_type": "start",
+      "data": {
+        "general": {
+          "filing_status": "mfj",
+          "taxpayer_first_name": "Michael",
+          "taxpayer_last_name": "Arbach",
+          "taxpayer_ssn": "813-14-0923",
+          "spouse_first_name": "Andrea",
+          "spouse_last_name": "Arbach",
+          "spouse_ssn": "402-37-4451",
+          "address_state": "IL",
+          "digital_assets": true,
+          "dependents": [
+            {
+              "first_name": "Alexander",
+              "last_name": "Arbach",
+              "dob": "2019-01-01",
+              "relationship": "son",
+              "months_in_home": 12,
+              "qualifying_child_for_ctc": true
+            },
+            {
+              "first_name": "Suria",
+              "last_name": "Arbach",
+              "dob": "2021-01-01",
+              "relationship": "daughter",
+              "months_in_home": 12,
+              "qualifying_child_for_ctc": true
+            },
+            {
+              "first_name": "Palmyra",
+              "last_name": "Arbach",
+              "ssn": "154-29-4975",
+              "dob": "2025-08-20",
+              "relationship": "daughter",
+              "months_in_home": 12,
+              "qualifying_child_for_ctc": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "node_type": "f1099int",
+      "data": {
+        "payer_name": "Robinhood Securities",
+        "box1": 7240.75
+      }
+    },
+    {
+      "node_type": "f1099div",
+      "data": {
+        "payerName": "Robinhood + Fidelity TOD (aggregate)",
+        "isNominee": false,
+        "box11": false,
+        "box1a": 8704.15,
+        "box1b": 1520.0
+      }
+    },
+    {
+      "node_type": "k1_partnership",
+      "data": {
+        "partnership_name": "ML Loyola Target, LLC",
+        "box5_interest": 3323,
+        "box1_ordinary_business": 0
+      }
+    },
+    {
+      "node_type": "k1_partnership",
+      "data": {
+        "partnership_name": "Petersburg Place Investors LLC (DRAFT K-1)",
+        "box2_rental_re": 15413,
+        "box5_interest": 3
+      }
+    },
+    {
+      "node_type": "k1_partnership",
+      "data": {
+        "partnership_name": "ML Sidecar Oscar Investors, LLC",
+        "box2_rental_re": -19107,
+        "box5_interest": 890
+      }
+    },
+    {
+      "node_type": "k1_s_corp",
+      "data": {
+        "corporation_name": "Hayat Health LLC",
+        "box1_ordinary_business": -26602.24
+      }
+    },
+    {
+      "node_type": "k1_s_corp",
+      "data": {
+        "corporation_name": "Sweet Home KC LLC",
+        "box2_rental_re": 23809.01
+      }
+    },
+    {
+      "node_type": "f8949",
+      "data": {
+        "part": "F",
+        "description": "MAVEN FINANCIAL TECHNOLOGIES INC - C-corp stock sale (installment, elected out). NO 1099-B/closing statement on file - NEEDS_DOC.",
+        "date_acquired": "VARIOUS",
+        "date_sold": "2025-12-31",
+        "proceeds": 220000,
+        "cost_basis": 0
+      }
+    },
+    {
+      "node_type": "form8889",
+      "data": {
+        "coverage_type": "family",
+        "taxpayer_hsa_contributions": 8300,
+        "months_of_hdhp_coverage": 12,
+        "hsa_distributions": 8185.08,
+        "qualified_medical_expenses": 8185.08
+      }
+    }
+  ]
+}

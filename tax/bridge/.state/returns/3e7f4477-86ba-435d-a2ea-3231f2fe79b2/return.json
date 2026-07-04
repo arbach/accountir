@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "returnId": "3e7f4477-86ba-435d-a2ea-3231f2fe79b2",
+    "year": 2024,
+    "formType": "il1120",
+    "createdAt": "2026-06-28T23:44:17.054Z"
+  },
+  "inputs": {
+    "il1120": [
+      {
+        "id": "il1120_01",
+        "fields": {
+          "federal_taxable_income": -10486
+        }
+      }
+    ]
+  }
+}

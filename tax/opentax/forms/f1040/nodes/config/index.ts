@@ -10,9 +10,13 @@
 // config2025 lives in ./2025.ts (forms/f1040/nodes/config/2025.ts).
 // For future forms (f1120), their barrel would import from ../../2025/config.ts
 // because f1120's year constants live in forms/f1120/2025/config.ts.
+import { config2023 } from "./2023.ts";
+import { config2024 } from "./2024.ts";
 import { config2025 } from "./2025.ts";
 export type { F1040Config } from "./types.ts";
 
 export const CONFIG_BY_YEAR: Record<number, import("./types.ts").F1040Config> = {
+  2023: config2023,
+  2024: config2024,
   2025: config2025,
 };

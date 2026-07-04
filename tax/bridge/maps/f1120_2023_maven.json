@@ -1,0 +1,12 @@
+{
+  "entity": "maven", "form": "f1120", "year": 2023, "manual": true,
+  "source": "FILED 2023 Form 1120 (client copy) — /tmp/migrate/taxall/Tax/2023/Maven/...CLIENT COPY.PDF. See tax/filed/FILED_RETURNS.md.",
+  "reconcile_target": -5461,
+  "reconcile_to": "f1120 line 28 = -5,461 (FILED)",
+  "_doc": "Maven C-corp 2023 from the FILED return. Filed: total income 134,849 - deductions 140,310 = -5,461. $0 tax; loss adds to NOL (cumulative federal NOL with 2024 ~= 15,947).",
+  "filer": { "node_type": "general", "data": { "corporation_name": "MAVEN FINANCIAL TECHNOLOGIES INC", "ein": "92-3379962", "address_state": "IL" } },
+  "manual_forms": [
+    { "node_type": "f1120", "data": { "line1a_gross_receipts": 134849, "line26_other_deductions": 140310 } }
+  ],
+  "accounts": {}
+}

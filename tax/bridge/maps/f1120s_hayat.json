@@ -1,0 +1,43 @@
+{
+  "entity": "hayat",
+  "form": "f1120s",
+  "book_net_target": { "2024": 34713.22, "2025": -26602.24 },
+  "reconcile_to": "Schedule K total income (ordinary line 21 + net rental) = book net",
+  "_doc": "Hayat Health LLC (S-corp, EIN 33-2127261), 100% Michael Arbach. Year-agnostic map. 2025: ordinary medical-consulting trade/business -> page 1 (revenue->1a gross receipts; expenses->deduction lines, abs). 2024: books are a single lumped account 9999 (+34,713.22) with no breakdown -> mapped to line5_other_income as a placeholder. NEEDS_REVIEW: 2024 Hayat books lack account-level detail (bookkeeping gap); no 2023 books.",
+
+  "filer": {
+    "node_type": "general",
+    "data": {
+      "corporation_name": "Hayat Health LLC",
+      "ein": "33-2127261",
+      "shareholder_name": "Michael Arbach",
+      "shareholder_tin": "813-14-0923",
+      "ownership_percentage": 100,
+      "is_officer_compensated": false,
+      "_flag": "NEEDS_REVIEW: officer reasonable-compensation — no W-2 officer comp booked for Michael; S-corp reasonable-comp rules may require some."
+    }
+  },
+
+  "accounts": {
+    "9999": { "node_type": "f1120s", "item_group": "p1", "field": "line5_other_income", "note": "2024 ONLY: lumped uncategorized net (+34,713.22). Signed (no abs). NEEDS_DOC: 2024 account-level breakdown." },
+    "4000": { "node_type": "f1120s", "item_group": "p1", "field": "line1a_gross_receipts", "note": "Service revenue (Mindwell consulting, 1099-NEC)." },
+    "4100": { "node_type": "f1120s", "item_group": "p1", "field": "line1a_gross_receipts", "note": "Prior-year revenue collected in 2025 (cash-basis gross receipts). NEEDS_REVIEW: confirm cash vs accrual." },
+    "5100": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true, "note": "Rent expense (no dedicated page-1 rent input; -> other deductions)." },
+    "5200": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true, "note": "Medical billing - Providersca." },
+    "5300": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true, "note": "Medical platform - Zocdoc." },
+    "5400": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true, "note": "Contractor payments. NEEDS_REVIEW: 1099-NEC contractors vs officer comp." },
+    "5500": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true },
+    "5600": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true, "note": "Advertising & marketing." },
+    "5700": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true },
+    "5800": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true },
+    "6000": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true, "note": "Professional services." },
+    "6110": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true },
+    "6140": { "node_type": "f1120s", "item_group": "p1", "field": "line12_taxes", "abs": true, "note": "Business license & fees -> taxes and licenses (line 12)." },
+    "6155": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true },
+    "6200": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true, "note": "Meals (50% limit not applied here — NEEDS_REVIEW)." },
+    "6320": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true },
+    "7053": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true },
+    "7201": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true },
+    "7203": { "node_type": "f1120s", "item_group": "p1", "field": "line19_other_deductions", "abs": true }
+  }
+}

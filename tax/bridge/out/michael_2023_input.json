@@ -1,0 +1,91 @@
+{
+  "year": 2023,
+  "forms": [
+    {
+      "node_type": "start",
+      "data": {
+        "general": {
+          "filing_status": "mfj",
+          "taxpayer_first_name": "Michael",
+          "taxpayer_last_name": "Arbach",
+          "taxpayer_ssn": "813-14-0923",
+          "spouse_first_name": "Andrea",
+          "spouse_last_name": "Arbach",
+          "spouse_ssn": "402-37-4451",
+          "address_state": "IL",
+          "dependents": [
+            {
+              "first_name": "Alexander",
+              "last_name": "Arbach",
+              "dob": "2019-01-01",
+              "relationship": "son",
+              "months_in_home": 12,
+              "qualifying_child_for_ctc": true
+            },
+            {
+              "first_name": "Suria",
+              "last_name": "Arbach",
+              "dob": "2021-01-01",
+              "relationship": "daughter",
+              "months_in_home": 12,
+              "qualifying_child_for_ctc": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "node_type": "f1099int",
+      "data": {
+        "payer_name": "Aggregate interest (filed 2b)",
+        "box1": 8619
+      }
+    },
+    {
+      "node_type": "f1099div",
+      "data": {
+        "payerName": "Aggregate dividends (filed 3b)",
+        "isNominee": false,
+        "box11": false,
+        "box1a": 10987,
+        "box1b": 1123
+      }
+    },
+    {
+      "node_type": "f8949",
+      "data": {
+        "part": "E",
+        "description": "Long-term, basis reported (Box E)",
+        "date_acquired": "VARIOUS",
+        "date_sold": "2023-12-31",
+        "proceeds": 1561,
+        "cost_basis": 200
+      }
+    },
+    {
+      "node_type": "f8949",
+      "data": {
+        "part": "F",
+        "description": "On-Chain LLC units sale (Box F, not on 1099-B)",
+        "date_acquired": "2021-03-01",
+        "date_sold": "2023-12-31",
+        "proceeds": 125000,
+        "cost_basis": 0
+      }
+    },
+    {
+      "node_type": "k1_s_corp",
+      "data": {
+        "corporation_name": "On-Chain LLC",
+        "box1_ordinary_business": 26680
+      }
+    },
+    {
+      "node_type": "k1_partnership",
+      "data": {
+        "partnership_name": "Direct rentals - KC houses (disregarded, Sch E Part I)",
+        "box2_rental_re": 1043
+      }
+    }
+  ]
+}

@@ -46,6 +46,7 @@ export type GetReturnResult = {
   readonly summary: ReturnSummary;
   readonly forms: readonly string[];
   readonly lines: Record<string, unknown>;
+  readonly pending: Record<string, Record<string, unknown>>;
   readonly warnings: readonly string[];
 };
 
@@ -155,6 +156,9 @@ export async function getReturnCommand(
   const result = execute(executionPlan, def.registry, engineInputs, { taxYear: meta.year, formType: meta.formType ?? "f1040" });
 
   const f1040 = result.pending["f1040"] ?? {};
+  // Corporate / non-1040 forms compute their lines under their own form-type node
+  // (e.g. f1120s). Fall back to the f1040 node so 1040 returns are unchanged.
+  const formLines = result.pending[meta.formType ?? "f1040"] ?? f1040;
 
   const warnings = softValidationWarnings(result.pending);
   for (const d of result.diagnostics) {
@@ -166,7 +170,8 @@ export async function getReturnCommand(
     year: meta.year,
     summary: extractSummary(f1040),
     forms: collectForms(result.pending),
-    lines: f1040,
+    lines: formLines,
+    pending: result.pending,
     warnings,
   };
 }

@@ -1,0 +1,29 @@
+{
+  "meta": {
+    "returnId": "223f5487-1df3-40a3-bf0a-4de1780bfe77",
+    "year": 2024,
+    "formType": "f1120",
+    "createdAt": "2026-06-28T23:44:14.960Z"
+  },
+  "inputs": {
+    "general": [
+      {
+        "id": "general_01",
+        "fields": {
+          "corporation_name": "MAVEN FINANCIAL TECHNOLOGIES INC",
+          "ein": "92-3379962",
+          "address_state": "IL"
+        }
+      }
+    ],
+    "f1120": [
+      {
+        "id": "f1120_01",
+        "fields": {
+          "line1a_gross_receipts": 197301,
+          "line26_other_deductions": 207787
+        }
+      }
+    ]
+  }
+}

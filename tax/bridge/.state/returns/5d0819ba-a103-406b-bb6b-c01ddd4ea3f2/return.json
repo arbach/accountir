@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "returnId": "5d0819ba-a103-406b-bb6b-c01ddd4ea3f2",
+    "year": 2025,
+    "formType": "il1120st",
+    "createdAt": "2026-06-28T23:35:31.298Z"
+  },
+  "inputs": {
+    "il1120st": [
+      {
+        "id": "il1120st_01",
+        "fields": {
+          "federal_ordinary_income": -26602.24,
+          "federal_net_rental": 0
+        }
+      }
+    ]
+  }
+}

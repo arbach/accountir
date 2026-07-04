@@ -686,3 +686,42 @@ Deno.test("Scenario 14: MFJ, CTC + ACTC, 3 children, $85K — refund $8,657", ()
   assertEquals(f["line35a_refund"], 8_657, "refund = $8,657");
   assertEquals(f["line37_amount_owed"], undefined, "no amount owed");
 });
+
+// ── Scenario: MFJ with BOTH an S-corp K-1 and a partnership K-1 ──────────────
+//
+// Regression for the multi-passthrough Schedule E bug: k1_s_corp routed its
+// Schedule E income only to the schedule1 display sink, never to agi_aggregator,
+// so S-corp passthrough income silently dropped out of AGI/total income. And once
+// k1_s_corp + k1_partnership both deposit line5_schedule_e, the executor hands the
+// aggregators an array — which they must SUM, not reject. (Input keys are the
+// SINGULAR node type, which the start node routes to each node's array input.)
+//
+// S-corp ordinary:        +200,000   (Box 1)
+// Partnership ordinary:    +30,000   (Box 1)
+// Schedule E net:         +230,000
+//   − MFJ standard deduction          31,500
+//   − QBI deduction  min(20%×230,000, 20%×198,500) = 39,700
+//   = taxable income                 158,800
+
+Deno.test("Scenario: MFJ S-corp K-1 + partnership K-1 — both passthroughs reach taxable income", () => {
+  const result = runReturn({
+    general: mfjGeneral(),
+    k1_s_corp: [{ corporation_name: "ACME S-CORP INC", box1_ordinary_business: 200_000 }],
+    k1_partnership: [{ partnership_name: "BETA PARTNERS LP", box1_ordinary_business: 30_000 }],
+  });
+
+  // No node failures: the accumulated array no longer breaks schedule1 / agi_aggregator,
+  // which previously threw "Expected number, received array" on line5_schedule_e.
+  const failures = result.diagnostics.filter(
+    (d) => d.code === "EXECUTOR_NODE_FAILURE" &&
+      (d.nodeType === "schedule1" || d.nodeType === "agi_aggregator"),
+  );
+  assertEquals(failures.length, 0, "no schedule1/agi_aggregator executor failures");
+
+  // Both passthrough sources reach taxable income. Before the fix the S-corp +200,000
+  // silently dropped out of AGI entirely (only the partnership +30,000 survived).
+  assertEquals(
+    result.pending["income_tax_calculation"]?.["taxable_income"], 158_800,
+    "taxable income = 230,000 − 31,500 std ded − 39,700 QBI",
+  );
+});

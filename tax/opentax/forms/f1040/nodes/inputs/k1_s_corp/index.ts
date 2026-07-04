@@ -4,6 +4,7 @@ import { TaxNode, output, type AtLeastOne } from "../../../../../core/types/tax-
 import { OutputNodes } from "../../../../../core/types/output-nodes.ts";
 import { f1040 } from "../../outputs/f1040/index.ts";
 import { schedule1 } from "../../outputs/schedule1/index.ts";
+import { agi_aggregator } from "../../intermediate/aggregation/agi_aggregator/index.ts";
 import { schedule_b } from "../../intermediate/aggregation/schedule_b/index.ts";
 import { schedule_d } from "../../intermediate/aggregation/schedule_d/index.ts";
 import { form8995 } from "../../intermediate/forms/form8995/index.ts";
@@ -122,7 +123,10 @@ export const inputSchema = z.object({
 type K1SCorpItem = z.infer<typeof itemSchema>;
 type K1SCorpItems = K1SCorpItem[];
 
-// Aggregate Schedule E income (Box 1 + 2 + 3 + 6) → schedule1 line5_schedule_e
+// Aggregate Schedule E income (Box 1 + 2 + 3 + 6) → Schedule 1 line 5.
+// Routes to BOTH the schedule1 display sink AND agi_aggregator (the node that
+// actually computes AGI / Form 1040 line 8). Mirrors k1_partnership; without the
+// agi_aggregator output, S-corp passthrough income never reaches total income.
 function schedule1Output(items: K1SCorpItems): NodeOutput[] {
   const total = items.reduce(
     (sum, item) =>
@@ -134,7 +138,10 @@ function schedule1Output(items: K1SCorpItems): NodeOutput[] {
     0,
   );
   if (total === 0) return [];
-  return [output(schedule1, { line5_schedule_e: total })];
+  return [
+    output(schedule1, { line5_schedule_e: total }),
+    output(agi_aggregator, { line5_schedule_e: total }),
+  ];
 }
 
 // Per-payer schedule_b entries for interest (Box 4)
@@ -313,7 +320,7 @@ function amtAdjustmentOutput(items: K1SCorpItems): NodeOutput[] {
 class K1SCorpNode extends TaxNode<typeof inputSchema> {
   readonly nodeType = "k1_s_corp";
   readonly inputSchema = inputSchema;
-  readonly outputNodes = new OutputNodes([schedule1, schedule_b, f1040, schedule_d, form8995, form_1116, form7203, form4797, rate_28_gain_worksheet, unrecaptured_1250_worksheet, form4562, form6251, schedule_a]);
+  readonly outputNodes = new OutputNodes([schedule1, agi_aggregator, schedule_b, f1040, schedule_d, form8995, form_1116, form7203, form4797, rate_28_gain_worksheet, unrecaptured_1250_worksheet, form4562, form6251, schedule_a]);
 
   compute(_ctx: NodeContext, input: z.infer<typeof inputSchema>): NodeResult {
     const { k1_s_corps } = inputSchema.parse(input);

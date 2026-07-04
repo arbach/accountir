@@ -1,0 +1,45 @@
+{
+  "entity": "michael",
+  "form": "f1040",
+  "year": 2025,
+  "manual": true,
+  "source": "2025 SOURCE DOCS (1099-INT/DIV, K-1s, 1099-SA/5498-SA) in /tmp/tax_extract — see tax/filed/SOURCE_DOCS_2025.md. Income ties to the books (233,673.65) but adds refinements the ledger lacks.",
+  "reconcile_target": 233673.65,
+  "reconcile_to": "f1040 line 9 total income = 233,673.65 (source-doc grounded)",
+  "_doc": "Michael & Andrea Arbach 2025 Form 1040, MFJ, 3 dependents. Built from actual 2025 source documents (books were validated for income but lack HSA, the qualified-dividend split, and the passive/rental character of the K-1s). Interest 11,456.74 = 1099-INT 7,240.75 + K-1 box5 (ML Loyola 3,323 + ML Sidecar 890 + Petersburg 3). Passthrough K-1s carry correct boxes/character. Two open flags: (1) the $220,000 Maven C-corp STOCK SALE has NO source doc here (private stock — needs the closing statement); kept per the engagement brief but FLAGGED. (2) Petersburg K-1 is a DRAFT.",
+
+  "filer": {
+    "node_type": "start",
+    "data": {
+      "general": {
+        "filing_status": "mfj",
+        "taxpayer_first_name": "Michael", "taxpayer_last_name": "Arbach", "taxpayer_ssn": "813-14-0923",
+        "spouse_first_name": "Andrea", "spouse_last_name": "Arbach", "spouse_ssn": "402-37-4451",
+        "address_state": "IL", "digital_assets": true,
+        "dependents": [
+          { "first_name": "Alexander", "last_name": "Arbach", "dob": "2019-01-01", "relationship": "son", "months_in_home": 12, "qualifying_child_for_ctc": true },
+          { "first_name": "Suria", "last_name": "Arbach", "dob": "2021-01-01", "relationship": "daughter", "months_in_home": 12, "qualifying_child_for_ctc": true },
+          { "first_name": "Palmyra", "last_name": "Arbach", "ssn": "154-29-4975", "dob": "2025-08-20", "relationship": "daughter", "months_in_home": 12, "qualifying_child_for_ctc": true }
+        ]
+      }
+    }
+  },
+
+  "manual_forms": [
+    { "node_type": "f1099int", "data": { "payer_name": "Robinhood Securities", "box1": 7240.75 } },
+    { "node_type": "f1099div", "data": { "payerName": "Robinhood + Fidelity TOD (aggregate)", "isNominee": false, "box11": false, "box1a": 8704.15, "box1b": 1520.00 } },
+
+    { "node_type": "k1_partnership", "data": { "partnership_name": "ML Loyola Target, LLC", "box5_interest": 3323, "box1_ordinary_business": 0 } },
+    { "node_type": "k1_partnership", "data": { "partnership_name": "Petersburg Place Investors LLC (DRAFT K-1)", "box2_rental_re": 15413, "box5_interest": 3 } },
+    { "node_type": "k1_partnership", "data": { "partnership_name": "ML Sidecar Oscar Investors, LLC", "box2_rental_re": -19107, "box5_interest": 890 } },
+
+    { "node_type": "k1_s_corp", "data": { "corporation_name": "Hayat Health LLC", "box1_ordinary_business": -26602.24 } },
+    { "node_type": "k1_s_corp", "data": { "corporation_name": "Sweet Home KC LLC", "box2_rental_re": 23809.01 } },
+
+    { "node_type": "f8949", "data": { "part": "F", "description": "MAVEN FINANCIAL TECHNOLOGIES INC - C-corp stock sale (installment, elected out). NO 1099-B/closing statement on file - NEEDS_DOC.", "date_acquired": "VARIOUS", "date_sold": "2025-12-31", "proceeds": 220000, "cost_basis": 0 } },
+
+    { "node_type": "form8889", "data": { "coverage_type": "family", "taxpayer_hsa_contributions": 8300, "months_of_hdhp_coverage": 12, "hsa_distributions": 8185.08, "qualified_medical_expenses": 8185.08 } }
+  ],
+
+  "accounts": {}
+}

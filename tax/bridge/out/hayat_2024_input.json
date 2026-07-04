@@ -1,0 +1,22 @@
+{
+  "year": 2024,
+  "forms": [
+    {
+      "node_type": "general",
+      "data": {
+        "corporation_name": "Hayat Health LLC",
+        "ein": "33-2127261",
+        "shareholder_name": "Michael Arbach",
+        "shareholder_tin": "813-14-0923",
+        "ownership_percentage": 100
+      }
+    },
+    {
+      "node_type": "f1120s",
+      "data": {
+        "line1a_gross_receipts": 68000,
+        "line19_other_deductions": 45903
+      }
+    }
+  ]
+}

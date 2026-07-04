@@ -1,0 +1,12 @@
+{
+  "entity": "maven", "form": "f1120", "year": 2024, "manual": true,
+  "source": "FILED 2024 Form 1120 (TurboTax) — /tmp/y2024/2024/Maven/...Filing.pdf. See tax/filed/FILED_RETURNS.md.",
+  "reconcile_target": -10486,
+  "reconcile_to": "f1120 line 28 income before NOL = -10,486 (FILED)",
+  "_doc": "Maven C-corp 2024 from the FILED return (books overstate the loss by ~$80k vs filed — book cleanup deferred). Filed: total income 197,301 (gross receipts) - total deductions 207,787 (other deductions 187,842 + rents 19,945) = -10,486. $0 tax; 2024 loss adds to NOL.",
+  "filer": { "node_type": "general", "data": { "corporation_name": "MAVEN FINANCIAL TECHNOLOGIES INC", "ein": "92-3379962", "address_state": "IL" } },
+  "manual_forms": [
+    { "node_type": "f1120", "data": { "line1a_gross_receipts": 197301, "line26_other_deductions": 207787 } }
+  ],
+  "accounts": {}
+}

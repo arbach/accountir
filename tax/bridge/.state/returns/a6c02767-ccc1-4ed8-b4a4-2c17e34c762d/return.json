@@ -1,0 +1,122 @@
+{
+  "meta": {
+    "returnId": "a6c02767-ccc1-4ed8-b4a4-2c17e34c762d",
+    "year": 2025,
+    "formType": "f1040",
+    "createdAt": "2026-06-28T21:33:23.653Z"
+  },
+  "inputs": {
+    "start": [
+      {
+        "id": "start_01",
+        "fields": {
+          "general": {
+            "filing_status": "mfj",
+            "taxpayer_first_name": "Michael",
+            "taxpayer_last_name": "Arbach",
+            "taxpayer_ssn": "813-14-0923",
+            "taxpayer_occupation": "Executive",
+            "spouse_first_name": "Andrea",
+            "spouse_last_name": "Arbach",
+            "address_state": "IL",
+            "digital_assets": true,
+            "dependents": [
+              {
+                "first_name": "Alexander",
+                "last_name": "Arbach",
+                "dob": "2019-01-01",
+                "relationship": "son",
+                "months_in_home": 12,
+                "qualifying_child_for_ctc": true,
+                "_dob_note": "NEEDS_DOC: birth year 2019 from brief; exact DOB from source doc (year is what drives CTC)"
+              },
+              {
+                "first_name": "Suria",
+                "last_name": "Arbach",
+                "dob": "2021-01-01",
+                "relationship": "daughter",
+                "months_in_home": 12,
+                "qualifying_child_for_ctc": true,
+                "_dob_note": "NEEDS_DOC: birth year 2021 from brief"
+              },
+              {
+                "first_name": "Palmyra",
+                "last_name": "Arbach",
+                "ssn": "154-29-4975",
+                "dob": "2025-08-20",
+                "relationship": "daughter",
+                "months_in_home": 12,
+                "qualifying_child_for_ctc": true
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "k1_s_corp": [
+      {
+        "id": "k1_s_corp_01",
+        "fields": {
+          "corporation_name": "SWEET HOME KC LLC",
+          "box1_ordinary_business": 23809
+        }
+      },
+      {
+        "id": "k1_s_corp_02",
+        "fields": {
+          "corporation_name": "Hayat Health LLC",
+          "box1_ordinary_business": -26602.24
+        }
+      }
+    ],
+    "k1_partnership": [
+      {
+        "id": "k1_partnership_01",
+        "fields": {
+          "partnership_name": "Petersburg Place LP",
+          "box2_rental_re": 15413
+        }
+      },
+      {
+        "id": "k1_partnership_02",
+        "fields": {
+          "partnership_name": "ML Sidecar Oscar LP",
+          "box1_ordinary_business": -19107
+        }
+      }
+    ],
+    "f1099int": [
+      {
+        "id": "f1099int_01",
+        "fields": {
+          "payer_name": "Aggregate interest (per books)",
+          "box1": 11456.74
+        }
+      }
+    ],
+    "f1099div": [
+      {
+        "id": "f1099div_01",
+        "fields": {
+          "payerName": "Aggregate dividends (per books)",
+          "isNominee": false,
+          "box11": false,
+          "box1a": 8704.15
+        }
+      }
+    ],
+    "f8949": [
+      {
+        "id": "f8949_01",
+        "fields": {
+          "part": "F",
+          "description": "MAVEN FINANCIAL TECHNOLOGIES INC - C-corp stock (installment sale, elected out -> all gain TY2025; not sec.1202)",
+          "date_acquired": "VARIOUS",
+          "date_sold": "2025-12-31",
+          "cost_basis": 0,
+          "proceeds": 220000
+        }
+      }
+    ]
+  }
+}

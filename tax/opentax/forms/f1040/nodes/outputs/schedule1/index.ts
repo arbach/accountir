@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TaxNode, type NodeResult } from "../../../../../core/types/tax-node.ts";
 import { OutputNodes } from "../../../../../core/types/output-nodes.ts";
 import type { NodeContext } from "../../../../../core/types/node-context.ts";
+import { sumNumericArrayFields } from "../../utils.ts";
 
 // Schedule 1 Output Node — Additional Income and Adjustments Assembly
 //
@@ -13,7 +14,7 @@ import type { NodeContext } from "../../../../../core/types/node-context.ts";
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
-const inputSchema = z.object({
+const inputObject = z.object({
   // ── Part I — Additional Income ────────────────────────────────────────────
   // Line 1 — Taxable refunds, credits, or offsets of state/local income taxes
   line1_state_refund: z.number().optional(),
@@ -91,7 +92,11 @@ const inputSchema = z.object({
   basis_disallowed_add_back: z.number().nonnegative().optional(),
 });
 
-type Schedule1Input = z.infer<typeof inputSchema>;
+// Multiple passthrough nodes (k1_s_corp, k1_partnership, schedule_e, …) can each
+// deposit line5_schedule_e; the executor accumulates them into an array. Sum first.
+const inputSchema = z.preprocess(sumNumericArrayFields, inputObject);
+
+type Schedule1Input = z.infer<typeof inputObject>;
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 

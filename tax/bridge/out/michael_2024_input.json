@@ -1,0 +1,44 @@
+{
+  "year": 2024,
+  "forms": [
+    {
+      "node_type": "start",
+      "data": {
+        "general": {
+          "filing_status": "mfj",
+          "taxpayer_first_name": "Michael",
+          "taxpayer_last_name": "Arbach",
+          "taxpayer_ssn": "813-14-0923",
+          "spouse_first_name": "Andrea",
+          "spouse_last_name": "Arbach",
+          "address_state": "IL",
+          "dependents": [
+            {
+              "first_name": "Alexander",
+              "last_name": "Arbach",
+              "dob": "2019-01-01",
+              "relationship": "son",
+              "months_in_home": 12,
+              "qualifying_child_for_ctc": true
+            },
+            {
+              "first_name": "Suria",
+              "last_name": "Arbach",
+              "dob": "2021-01-01",
+              "relationship": "daughter",
+              "months_in_home": 12,
+              "qualifying_child_for_ctc": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "node_type": "k1_partnership",
+      "data": {
+        "partnership_name": "LUMPED 2024 loss (placeholder \u2014 see _WARNING)",
+        "box1_ordinary_business": -294808.95
+      }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::Html,
     routing::{get, post},
@@ -526,6 +526,348 @@ async fn bg_import_bank_file(
     }))
 }
 
+// ---------------------------------------------------------------------------
+// Transactions & vendors (for the web app at /app/transactions)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct TransactionSummary {
+    id: String,
+    date: String,
+    memo: String,
+    /// Sum of debit lines, in the entry's smallest currency unit.
+    amount: i64,
+    source: Option<String>,
+    reference: Option<String>,
+    /// Vendor/merchant name, if known (from Plaid merchant data).
+    vendor: Option<String>,
+    is_void: bool,
+}
+
+#[derive(Serialize)]
+struct TxLine {
+    account_number: String,
+    account_name: String,
+    amount: i64,
+    currency: String,
+    memo: Option<String>,
+}
+
+#[derive(Serialize)]
+struct VendorRef {
+    /// Stable id the frontend can use for `GET /vendors/:id` (the merchant name).
+    id: String,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct StatementFileRef {
+    id: i64,
+    file_name: String,
+    file_path: String,
+}
+
+#[derive(Serialize)]
+struct CryptoRef {
+    chain: String,
+    tx_hash: String,
+    explorer_url: String,
+    verified: bool,
+    verify_error: Option<String>,
+    amount: i64,
+    asset: String,
+}
+
+#[derive(Serialize)]
+struct TransactionDetail {
+    id: String,
+    date: String,
+    memo: String,
+    reference: Option<String>,
+    source: Option<String>,
+    is_void: bool,
+    lines: Vec<TxLine>,
+    /// The vendor, if any — the frontend links here from the detail view.
+    vendor: Option<VendorRef>,
+    /// Provenance: source bank statement file, if imported from one.
+    statement_file: Option<StatementFileRef>,
+    /// Provenance: on-chain transaction (hash + explorer link + verification).
+    crypto: Option<CryptoRef>,
+}
+
+#[derive(Serialize)]
+struct VendorDetail {
+    id: String,
+    name: String,
+    transactions: Vec<TransactionSummary>,
+}
+
+const VENDOR_SUBQUERY: &str = "(SELECT pst.merchant_name FROM plaid_imported_transactions pit
+        JOIN plaid_staged_transactions pst ON pst.plaid_transaction_id = pit.plaid_transaction_id
+        WHERE pit.entry_id = je.id AND pst.merchant_name IS NOT NULL LIMIT 1)";
+
+fn map_summary(row: &rusqlite::Row) -> rusqlite::Result<TransactionSummary> {
+    Ok(TransactionSummary {
+        id: row.get(0)?,
+        date: row.get(1)?,
+        memo: row.get(2)?,
+        reference: row.get(3)?,
+        source: row.get(4)?,
+        is_void: row.get::<_, i64>(5)? == 1,
+        amount: row.get(6)?,
+        vendor: row.get(7)?,
+    })
+}
+
+fn list_transactions_core(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<TransactionSummary>> {
+    let sql = format!(
+        "SELECT je.id, je.date, je.memo, je.reference, je.source, je.is_void,
+            COALESCE((SELECT SUM(jl.amount) FROM journal_lines jl
+                      WHERE jl.entry_id = je.id AND jl.amount > 0), 0) AS amount,
+            {VENDOR_SUBQUERY} AS vendor
+         FROM journal_entries je
+         ORDER BY je.date DESC, je.id
+         LIMIT 1000"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map([], map_summary)?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Row shape for a journal-entry header:
+/// (date, memo, reference, source, is_void, vendor).
+type EntryHeaderRow = (String, String, Option<String>, Option<String>, i64, Option<String>);
+
+fn transaction_detail_core(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> rusqlite::Result<Option<TransactionDetail>> {
+    let header: Option<EntryHeaderRow> = conn
+        .query_row(
+            &format!(
+                "SELECT je.date, je.memo, je.reference, je.source, je.is_void, {VENDOR_SUBQUERY} AS vendor
+                 FROM journal_entries je WHERE je.id = ?1"
+            ),
+            [id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .ok();
+
+    let (date, memo, reference, source, is_void, vendor_name) = match header {
+        Some(h) => h,
+        None => return Ok(None),
+    };
+
+    let mut stmt = conn.prepare(
+        "SELECT a.account_number, a.name, jl.amount, jl.currency, jl.memo
+         FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id
+         WHERE jl.entry_id = ?1 ORDER BY jl.id",
+    )?;
+    let lines = stmt
+        .query_map([id], |row| {
+            Ok(TxLine {
+                account_number: row.get(0)?,
+                account_name: row.get(1)?,
+                amount: row.get(2)?,
+                currency: row.get(3)?,
+                memo: row.get(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let statement_file = conn
+        .query_row(
+            "SELECT sf.id, sf.file_name, sf.file_path
+             FROM entry_statement_files esf JOIN statement_files sf ON sf.id = esf.statement_file_id
+             WHERE esf.entry_id = ?1",
+            [id],
+            |row| {
+                Ok(StatementFileRef {
+                    id: row.get(0)?,
+                    file_name: row.get(1)?,
+                    file_path: row.get(2)?,
+                })
+            },
+        )
+        .ok();
+
+    let crypto = conn
+        .query_row(
+            "SELECT chain, tx_hash, explorer_url, verified, verify_error, amount, asset
+             FROM crypto_transactions WHERE entry_id = ?1",
+            [id],
+            |row| {
+                Ok(CryptoRef {
+                    chain: row.get(0)?,
+                    tx_hash: row.get(1)?,
+                    explorer_url: row.get(2)?,
+                    verified: row.get::<_, i64>(3)? == 1,
+                    verify_error: row.get(4)?,
+                    amount: row.get(5)?,
+                    asset: row.get(6)?,
+                })
+            },
+        )
+        .ok();
+
+    Ok(Some(TransactionDetail {
+        id: id.to_string(),
+        date,
+        memo,
+        reference,
+        source,
+        is_void: is_void == 1,
+        lines,
+        vendor: vendor_name.map(|name| VendorRef {
+            id: name.clone(),
+            name,
+        }),
+        statement_file,
+        crypto,
+    }))
+}
+
+fn vendor_detail_core(
+    conn: &rusqlite::Connection,
+    vendor_id: &str,
+) -> rusqlite::Result<Option<VendorDetail>> {
+    let sql = format!(
+        "SELECT je.id, je.date, je.memo, je.reference, je.source, je.is_void,
+            COALESCE((SELECT SUM(jl.amount) FROM journal_lines jl
+                      WHERE jl.entry_id = je.id AND jl.amount > 0), 0) AS amount,
+            {VENDOR_SUBQUERY} AS vendor
+         FROM journal_entries je
+         WHERE je.id IN (
+            SELECT pit.entry_id FROM plaid_imported_transactions pit
+            JOIN plaid_staged_transactions pst ON pst.plaid_transaction_id = pit.plaid_transaction_id
+            WHERE pst.merchant_name = ?1
+         )
+         ORDER BY je.date DESC, je.id"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let transactions: Vec<TransactionSummary> = stmt
+        .query_map([vendor_id], map_summary)?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if transactions.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(VendorDetail {
+        id: vendor_id.to_string(),
+        name: vendor_id.to_string(),
+        transactions,
+    }))
+}
+
+fn db_unavailable() -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse {
+            success: false,
+            error: "No database open".to_string(),
+        }),
+    )
+}
+
+fn db_error(e: rusqlite::Error) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            success: false,
+            error: e.to_string(),
+        }),
+    )
+}
+
+fn not_found(what: &str) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            success: false,
+            error: format!("{what} not found"),
+        }),
+    )
+}
+
+// Background-server (SharedState) handlers.
+async fn bg_transactions(
+    State(state): State<Arc<SharedState>>,
+) -> Result<Json<Vec<TransactionSummary>>, (StatusCode, Json<ErrorResponse>)> {
+    let guard = state.db.lock().unwrap();
+    let active = guard.as_ref().ok_or_else(db_unavailable)?;
+    let txs = list_transactions_core(active.store.connection()).map_err(db_error)?;
+    Ok(Json(txs))
+}
+
+async fn bg_transaction_detail(
+    State(state): State<Arc<SharedState>>,
+    Path(id): Path<String>,
+) -> Result<Json<TransactionDetail>, (StatusCode, Json<ErrorResponse>)> {
+    let guard = state.db.lock().unwrap();
+    let active = guard.as_ref().ok_or_else(db_unavailable)?;
+    match transaction_detail_core(active.store.connection(), &id).map_err(db_error)? {
+        Some(detail) => Ok(Json(detail)),
+        None => Err(not_found("transaction")),
+    }
+}
+
+async fn bg_vendor_detail(
+    State(state): State<Arc<SharedState>>,
+    Path(id): Path<String>,
+) -> Result<Json<VendorDetail>, (StatusCode, Json<ErrorResponse>)> {
+    let guard = state.db.lock().unwrap();
+    let active = guard.as_ref().ok_or_else(db_unavailable)?;
+    match vendor_detail_core(active.store.connection(), &id).map_err(db_error)? {
+        Some(v) => Ok(Json(v)),
+        None => Err(not_found("vendor")),
+    }
+}
+
+// Standalone-server (AppState) handlers.
+async fn transactions(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<TransactionSummary>>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().unwrap();
+    let txs = list_transactions_core(store.connection()).map_err(db_error)?;
+    Ok(Json(txs))
+}
+
+async fn transaction_detail(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<TransactionDetail>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().unwrap();
+    match transaction_detail_core(store.connection(), &id).map_err(db_error)? {
+        Some(detail) => Ok(Json(detail)),
+        None => Err(not_found("transaction")),
+    }
+}
+
+async fn vendor_detail(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<VendorDetail>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().unwrap();
+    match vendor_detail_core(store.connection(), &id).map_err(db_error)? {
+        Some(v) => Ok(Json(v)),
+        None => Err(not_found("vendor")),
+    }
+}
+
 /// Start the background sync server and return a handle the TUI can use to
 /// set/clear the active database.  Returns `None` if the port is already in use.
 pub async fn start_server_task() -> Option<ServerDb> {
@@ -542,6 +884,14 @@ pub async fn start_server_task() -> Option<ServerDb> {
         .route("/accounts/link-bank", post(bg_link_bank))
         .route("/import/bank-csv", post(bg_import_bank_csv))
         .route("/import/bank-file", post(bg_import_bank_file))
+        // Transactions & vendors (web app)
+        .route("/transactions", get(bg_transactions))
+        .route("/transactions/{id}", get(bg_transaction_detail))
+        .route("/vendors/{id}", get(bg_vendor_detail))
+        // Web app pages
+        .route("/app/transactions", get(app_transactions_page))
+        .route("/app/transactions/{id}", get(app_transaction_detail_page))
+        .route("/app/vendors/{id}", get(app_vendor_page))
         // Plaid integration routes
         .route("/plaid/config", get(plaid_config))
         .route("/plaid/link-token", post(plaid_link_token))
@@ -1511,6 +1861,20 @@ async fn plaid_link_page() -> Html<&'static str> {
     Html(include_str!("plaid_link.html"))
 }
 
+// Web app pages (served at /app/...). Each fetches the JSON endpoints client-side,
+// so the same HTML serves any id.
+async fn app_transactions_page() -> Html<&'static str> {
+    Html(include_str!("app_transactions.html"))
+}
+
+async fn app_transaction_detail_page() -> Html<&'static str> {
+    Html(include_str!("app_transaction_detail.html"))
+}
+
+async fn app_vendor_page() -> Html<&'static str> {
+    Html(include_str!("app_vendor.html"))
+}
+
 // Helper functions
 
 struct PlaidProxyConfig {
@@ -1908,6 +2272,12 @@ pub async fn run_server(store: EventStore, db_path: PathBuf) -> anyhow::Result<(
         .route("/accounts/link-bank", post(link_bank))
         .route("/import/bank-csv", post(import_bank_csv))
         .route("/import/bank-file", post(import_bank_file))
+        .route("/transactions", get(transactions))
+        .route("/transactions/{id}", get(transaction_detail))
+        .route("/vendors/{id}", get(vendor_detail))
+        .route("/app/transactions", get(app_transactions_page))
+        .route("/app/transactions/{id}", get(app_transaction_detail_page))
+        .route("/app/vendors/{id}", get(app_vendor_page))
         .layer(cors)
         .with_state(state);
 

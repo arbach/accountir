@@ -717,6 +717,40 @@ impl App {
             .filter_map(|r| r.ok())
             .collect();
 
+        // Provenance: crypto on-chain record takes precedence, else a bank statement file.
+        let provenance = conn
+            .query_row(
+                "SELECT chain, tx_hash, explorer_url, verified, verify_error
+                 FROM crypto_transactions WHERE entry_id = ?1",
+                [entry_id],
+                |row| {
+                    Ok(crate::tui::views::entry_detail::Provenance::Crypto {
+                        chain: row.get(0)?,
+                        tx_hash: row.get(1)?,
+                        explorer_url: row.get(2)?,
+                        verified: row.get::<_, i64>(3)? == 1,
+                        verify_error: row.get(4)?,
+                    })
+                },
+            )
+            .ok()
+            .or_else(|| {
+                conn.query_row(
+                    "SELECT sf.file_name, sf.file_path
+                     FROM entry_statement_files esf
+                     JOIN statement_files sf ON sf.id = esf.statement_file_id
+                     WHERE esf.entry_id = ?1",
+                    [entry_id],
+                    |row| {
+                        Ok(crate::tui::views::entry_detail::Provenance::Statement {
+                            file_name: row.get(0)?,
+                            file_path: row.get(1)?,
+                        })
+                    },
+                )
+                .ok()
+            });
+
         Some(EntryDetail {
             entry_id: entry_id.to_string(),
             date,
@@ -724,6 +758,7 @@ impl App {
             reference,
             is_void: is_void == 1,
             lines,
+            provenance,
         })
     }
 
@@ -3746,11 +3781,30 @@ fn perform_bank_import(
         })
         .collect();
 
+    // Look up the source statement file for this pending import so each entry can
+    // be linked back to the file it came from.
+    let source_file: Option<crate::commands::import_commands::StatementFileRef> = store
+        .connection()
+        .query_row(
+            "SELECT file_path, file_name, bank_id FROM pending_imports WHERE id = ?1",
+            [import_id],
+            |row| {
+                Ok(crate::commands::import_commands::StatementFileRef {
+                    file_path: row.get(0)?,
+                    file_name: row.get(1)?,
+                    bank_id: row.get(2)?,
+                    account_id: Some(account_id.to_string()),
+                })
+            },
+        )
+        .ok();
+
     let count = crate::commands::import_commands::import_bank_transactions(
         store,
         account_id,
         target_account_type,
         &import_txns,
+        source_file.as_ref(),
     )
     .map_err(|e| e.to_string())?;
 

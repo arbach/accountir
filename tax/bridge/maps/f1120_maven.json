@@ -1,0 +1,48 @@
+{
+  "entity": "maven",
+  "form": "f1120",
+  "book_net_target": { "2023": -94625.43, "2024": -90908.28, "2025": -3886.33 },
+  "reconcile_to": "f1120 line 28 income before NOL = book net",
+  "_doc": "MAVEN FINANCIAL TECHNOLOGIES INC (C-corp, EIN 92-3379962), 100% Michael Arbach. Year-agnostic map. Operating LOSS every year -> line 28 negative -> NOL carryforward, $0 tax. All income/deduction accounts merge into the single f1120 node (item_group 'p1'); deductions use abs magnitudes. The $220k Michael Maven-STOCK LTCG is on his 1040 (Sch D), NOT here; the $80k IP SALE below is corporate revenue. NEEDS_REVIEW flags inline.",
+
+  "filer": {
+    "node_type": "general",
+    "data": {
+      "corporation_name": "MAVEN FINANCIAL TECHNOLOGIES INC",
+      "ein": "92-3379962",
+      "address_state": "IL"
+    }
+  },
+
+  "accounts": {
+    "4200": { "node_type": "f1120", "item_group": "p1", "field": "line1a_gross_receipts", "note": "Consulting income (2024, 2025)." },
+    "4250": { "node_type": "f1120", "item_group": "p1", "field": "line10_other_income", "note": "Grant income - Stellar (2023). NEEDS_REVIEW: grant taxability / whether excludable." },
+    "4350": { "node_type": "f1120", "item_group": "p1", "field": "line10_other_income", "note": "IP Sales Revenue (2025, $80k). NEEDS_REVIEW: ordinary other income vs capital gain (line 8) / §1231 vs §1245 recapture — depends on the IP's basis/holding." },
+    "4800": { "node_type": "f1120", "item_group": "p1", "field": "line5_interest", "note": "Interest income (2025, $31,700)." },
+
+    "5300": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true, "note": "Subcontractors (largest expense). NEEDS_REVIEW: COGS (line 2) vs other deductions; 1099-NEC/W-8 vendor status." },
+    "6040": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6050": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6120": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6130": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6140": { "node_type": "f1120", "item_group": "p1", "field": "line17_taxes_licenses", "abs": true, "note": "Business tax, license & fees -> taxes and licenses (line 17)." },
+    "6155": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6160": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true, "note": "Advertising & marketing." },
+    "6210": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true, "note": "Meals. NEEDS_REVIEW: 50% limitation not applied." },
+    "6220": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6240": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6250": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6310": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6320": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6330": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6340": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6450": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true, "note": "Rent expense." },
+    "6451": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true, "note": "Lease expense (2023, 2024)." },
+    "6470": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6510": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true, "note": "Travel." },
+    "6520": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6530": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true },
+    "6800": { "node_type": "f1120", "item_group": "p1", "field": "line19_charitable", "abs": true, "note": "Charitable donations ($140, 2025). NEEDS_REVIEW: C-corp 10%-of-taxable-income limit; in a loss year it is non-deductible and carries forward 5 yrs (immaterial here)." },
+    "7150": { "node_type": "f1120", "item_group": "p1", "field": "line26_other_deductions", "abs": true, "note": "Other expense." }
+  }
+}

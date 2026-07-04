@@ -15,6 +15,7 @@ import { form8962 } from "../../forms/form8962/index.ts";
 import { form8880 } from "../../forms/form8880/index.ts";
 import { FilingStatus } from "../../../types.ts";
 import { CONFIG_BY_YEAR } from "../../../config/index.ts";
+import { sumNumericArrayFields } from "../../../utils.ts";
 
 // AGI Aggregator — Form 1040 Line 11
 //
@@ -33,7 +34,7 @@ import { CONFIG_BY_YEAR } from "../../../config/index.ts";
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
-export const inputSchema = z.object({
+const inputObject = z.object({
   // ── Form 1040 income lines ─────────────────────────────────────────────────
   // Line 1a — Wages (W-2 Box 1, regular employees)
   line1a_wages: z.number().optional(),
@@ -146,7 +147,11 @@ export const inputSchema = z.object({
   line19_student_loan_interest: z.number().nonnegative().optional(),
 });
 
-type AgiInput = z.infer<typeof inputSchema>;
+// Multiple passthrough nodes (k1_s_corp, k1_partnership, schedule_e, …) can each
+// deposit the same Schedule-E key; the executor accumulates them into an array. Sum first.
+export const inputSchema = z.preprocess(sumNumericArrayFields, inputObject);
+
+type AgiInput = z.infer<typeof inputObject>;
 
 // ─── SSA Taxability Worksheet (IRC §86) ───────────────────────────────────────
 // Computes the taxable portion of Social Security benefits.

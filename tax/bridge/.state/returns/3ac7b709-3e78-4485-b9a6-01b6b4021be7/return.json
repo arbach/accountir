@@ -1,0 +1,53 @@
+{
+  "meta": {
+    "returnId": "3ac7b709-3e78-4485-b9a6-01b6b4021be7",
+    "year": 2024,
+    "formType": "f1040",
+    "createdAt": "2026-06-28T22:35:57.632Z"
+  },
+  "inputs": {
+    "start": [
+      {
+        "id": "start_01",
+        "fields": {
+          "general": {
+            "filing_status": "mfj",
+            "taxpayer_first_name": "Michael",
+            "taxpayer_last_name": "Arbach",
+            "taxpayer_ssn": "813-14-0923",
+            "spouse_first_name": "Andrea",
+            "spouse_last_name": "Arbach",
+            "address_state": "IL",
+            "dependents": [
+              {
+                "first_name": "Alexander",
+                "last_name": "Arbach",
+                "dob": "2019-01-01",
+                "relationship": "son",
+                "months_in_home": 12,
+                "qualifying_child_for_ctc": true
+              },
+              {
+                "first_name": "Suria",
+                "last_name": "Arbach",
+                "dob": "2021-01-01",
+                "relationship": "daughter",
+                "months_in_home": 12,
+                "qualifying_child_for_ctc": true
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "k1_partnership": [
+      {
+        "id": "k1_partnership_01",
+        "fields": {
+          "partnership_name": "LUMPED 2024 loss (placeholder — see _WARNING)",
+          "box1_ordinary_business": -294808.95
+        }
+      }
+    ]
+  }
+}

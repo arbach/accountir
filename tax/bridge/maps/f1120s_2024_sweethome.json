@@ -1,0 +1,14 @@
+{
+  "entity": "sweethome", "form": "f1120s", "year": 2024, "manual": true,
+  "source": "FILED 2024 Form 1120-S + Form 8825 — /tmp/y2024/2024/Sweet Home/...Filing.pdf. See tax/filed/FILED_RETURNS.md.",
+  "reconcile_target": 15328,
+  "reconcile_to": "Schedule K line 2 net rental real estate = 15,328 (FILED Form 8825)",
+  "_doc": "SweetHome 2024 from the FILED 1120-S (S-election eff 01/01/2024 — owner wants this reverted to a disregarded LLC; deferred, task #7). No operating business; 3 KC rental properties on Form 8825 -> net rental 15,328 -> Sch K line 2 -> K-1 box 2. Per-property nets: 4023 E 115th 4,423; 11211 Norby 4,580; 13209 Fuller 6,325.",
+  "filer": { "node_type": "general", "data": { "corporation_name": "SWEET HOME KC LLC", "ein": "93-2942628", "shareholder_name": "Michael Arbach", "shareholder_tin": "813-14-0923", "ownership_percentage": 100 } },
+  "manual_forms": [
+    { "node_type": "f8825", "data": { "property_address": "4023 E 115th, Kansas City MO 64137", "property_type": "residential", "gross_rents": 12000, "expense_other": 7577 } },
+    { "node_type": "f8825", "data": { "property_address": "11211 Norby Rd, Kansas City MO 64137", "property_type": "residential", "gross_rents": 13200, "expense_other": 8620 } },
+    { "node_type": "f8825", "data": { "property_address": "13209 Fuller Ave, Grandview MO 64030", "property_type": "residential", "gross_rents": 12000, "expense_other": 5675 } }
+  ],
+  "accounts": {}
+}

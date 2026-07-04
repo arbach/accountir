@@ -1,0 +1,20 @@
+{
+  "year": 2024,
+  "forms": [
+    {
+      "node_type": "general",
+      "data": {
+        "corporation_name": "MAVEN FINANCIAL TECHNOLOGIES INC",
+        "ein": "92-3379962",
+        "address_state": "IL"
+      }
+    },
+    {
+      "node_type": "f1120",
+      "data": {
+        "line1a_gross_receipts": 197301,
+        "line26_other_deductions": 207787
+      }
+    }
+  ]
+}

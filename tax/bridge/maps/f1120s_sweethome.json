@@ -1,0 +1,31 @@
+{
+  "entity": "sweethome",
+  "form": "f1120s",
+  "book_net_target": { "2023": 13747.81, "2024": 11534.29, "2025": 23809.01 },
+  "reconcile_to": "Schedule K net rental real estate (Form 8825) = book net; ordinary line 21 = 0",
+  "_doc": "SWEET HOME KC LLC (S-corp, EIN 93-2942628), 100% Michael Arbach. 100% rental real estate (3 KC-MO properties) -> Form 8825 -> Schedule K line 2 (NOT ordinary). Year-agnostic map. The books do NOT split expenses per property, so all rental income + expenses aggregate into ONE 8825 property item (item_group 'rental'); the per-property split is a refinement (NEEDS_DOC). Net rental = gross rents - expenses = book net.",
+
+  "filer": {
+    "node_type": "general",
+    "data": {
+      "corporation_name": "SWEET HOME KC LLC",
+      "ein": "93-2942628",
+      "shareholder_name": "Michael Arbach",
+      "shareholder_tin": "813-14-0923",
+      "ownership_percentage": 100,
+      "is_officer_compensated": false
+    }
+  },
+
+  "accounts": {
+    "4000": { "node_type": "f8825", "item_group": "rental", "static": { "property_address": "SWEET HOME KC LLC - 11211 Norby Rd / 4023 E 115th / 13209 Fuller (aggregate, see NEEDS_DOC)", "property_type": "residential" }, "field": "gross_rents", "note": "Rental income - 11211 Norby Rd, Kansas City MO." },
+    "4200": { "node_type": "f8825", "item_group": "rental", "field": "gross_rents", "note": "Rental income - 4023 E 115th, Kansas City MO (M. Wallace)." },
+    "4300": { "node_type": "f8825", "item_group": "rental", "field": "gross_rents", "note": "Rental income - 13209 Fuller Ave, Grandview MO (Zach)." },
+    "5100": { "node_type": "f8825", "item_group": "rental", "field": "expense_taxes", "abs": true, "note": "Property taxes." },
+    "5200": { "node_type": "f8825", "item_group": "rental", "field": "expense_other", "abs": true, "note": "Bank service charges & fees." },
+    "5300": { "node_type": "f8825", "item_group": "rental", "field": "expense_repairs", "abs": true, "note": "Repairs & maintenance." },
+    "5400": { "node_type": "f8825", "item_group": "rental", "field": "expense_other", "abs": true, "note": "Home warranty & service plans." },
+    "5500": { "node_type": "f8825", "item_group": "rental", "field": "expense_other", "abs": true, "note": "Miscellaneous business expenses." },
+    "6000": { "node_type": "f8825", "item_group": "rental", "field": "expense_depreciation", "abs": true, "note": "Depreciation expense. NEEDS_DOC: tie to a per-property depreciation schedule (4562)." }
+  }
+}
