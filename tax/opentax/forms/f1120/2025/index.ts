@@ -2,10 +2,9 @@ import type { FormDefinition } from "../../../core/types/form-definition.ts";
 import { F1120_2025_CONFIG } from "./config.ts";
 import { inputNodes } from "./inputs.ts";
 import { registry } from "./registry.ts";
+import { buildPdfBytes } from "./pdf/builder.ts";
 
-// Full MeF XML and PDF generation are a later phase. The compute + reconcile
-// pipeline (executor → pending lines) does not call buildMefXml / buildPdfBytes,
-// so these stubs do not affect `return get` / compute.
+// MeF XML is a later phase. PDF rendering (page 1) is implemented in pdf/builder.ts.
 
 export const f1120_2025: FormDefinition = {
   ...F1120_2025_CONFIG,
@@ -15,8 +14,8 @@ export const f1120_2025: FormDefinition = {
   buildMefXml: (_pending, _filer) => {
     throw new Error("buildMefXml not yet implemented for f1120");
   },
-  // Stub: PDF rendering for the 1120 is not yet implemented.
-  buildPdfBytes: (_pending, _filer) => Promise.resolve(new Uint8Array()),
+  // Fills IRS Form 1120 page 1 from the computed lines + filer identity.
+  buildPdfBytes: (pending, filer) => buildPdfBytes(pending, filer),
   // Identity passthrough — no format-specific normalization yet.
   buildPending: (pending: Record<string, unknown>) => pending,
 };
