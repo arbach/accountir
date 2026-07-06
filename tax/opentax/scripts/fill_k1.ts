@@ -13,7 +13,12 @@ const MAP: Record<string, number> = {
   box5a_ordinary_dividends: 5,
 };
 
-const [fillPath, outPath] = Deno.args;
+// Box 16 "Items affecting shareholder basis" grid (RightCol Lines13-17): row 1 =
+// code field f1_80 + amount f1_81. Distributions are code D. Verified by position.
+const BOX16_CODE = "topmostSubform[0].Page1[0].RightCol[0].Lines13-17[0].f1_80[0]";
+const BOX16_AMT = "topmostSubform[0].Page1[0].RightCol[0].Lines13-17[0].f1_81[0]";
+
+const [fillPath, outPath, distArg] = Deno.args;
 const fill = JSON.parse(await Deno.readTextFile(fillPath));
 // pull schedule_k1.* values from the fill lines
 const k1: Record<string, number> = {};
@@ -43,6 +48,15 @@ for (const [key, box] of Object.entries(MAP)) {
     set(BOX(box), Math.round(v).toString());
     filled++;
   }
+}
+
+// Box 16d — Distributions (code D). Reduces stock basis; from equity draws
+// (passed in, since it's off the P&L) or schedule_k1.box16d_distributions.
+const dist = distArg ? Number(distArg) : (k1.box16d_distributions ?? 0);
+if (dist && dist > 0) {
+  set(BOX16_CODE, "D");
+  set(BOX16_AMT, Math.round(dist).toString());
+  filled++;
 }
 
 const font = await doc.embedFont(StandardFonts.Helvetica);

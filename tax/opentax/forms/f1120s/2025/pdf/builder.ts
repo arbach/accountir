@@ -87,6 +87,16 @@ export function buildPdfBytes(
       setText(form, field, Math.round(v).toString());
     }
 
+    // Distributions (owner draws — an equity item off the P&L, injected from the
+    // ledger's distribution accounts): Schedule K line 16d + Schedule M-2 line 7,
+    // column (a) AAA (reduces the accumulated adjustments account). Also on K-1 box 16d.
+    const dist = scalar(lines["line16d_distributions"]);
+    if (dist && dist !== 0) {
+      const d = Math.round(dist).toString();
+      setText(form, "topmostSubform[0].Page3[0].f3_46[0]", d);
+      setText(form, "topmostSubform[0].Page5[0].Table_SchM-2[0].Line7[0].f5_43[0]", d);
+    }
+
     // Header identity (best-effort — accepts the general node's data or a flat object).
     // deno-lint-ignore no-explicit-any
     const f = (filer ?? {}) as any;
