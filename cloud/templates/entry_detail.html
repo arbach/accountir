@@ -40,6 +40,15 @@
   </div>
 </div>
 
+<div class="card" style="margin-bottom: var(--gap);">
+  <h3 style="margin-top:0;">Note</h3>
+  <form method="post" action="/app/entries/{{ entry.id }}/note">
+    <textarea name="note" rows="3" placeholder="Add a note about this transaction…"
+      style="width:100%; box-sizing:border-box; font-size:13px; padding:8px; border:1px solid var(--border,#ccc); border-radius:6px; resize:vertical;">{% match entry.note %}{% when Some with (n) %}{{ n }}{% when None %}{% endmatch %}</textarea>
+    <div style="margin-top:8px;"><button type="submit" class="btn btn-primary" style="font-size:12px; padding:4px 12px;">Save note</button></div>
+  </form>
+</div>
+
 {% match entry.crypto %}
 {% when Some with (c) %}
 <div class="card" style="margin-bottom: var(--gap);">
@@ -95,7 +104,7 @@
   {% else %}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Document</th><th style="width:120px">Type</th><th style="width:90px" class="num">Size</th><th style="width:90px"></th></tr></thead>
+      <thead><tr><th>Document</th><th style="width:110px">Type</th><th style="width:70px" class="num">Size</th><th style="width:220px"></th></tr></thead>
       <tbody>
       {% for d in entry.documents %}
         <tr>
@@ -105,7 +114,33 @@
           </td>
           <td><span class="badge">{{ d.doc_type }}</span></td>
           <td class="num">{{ d.size_display() }}</td>
-          <td><a href="/app/documents/{{ d.file_id }}/download" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">Download</a></td>
+          <td>
+            <div class="doc-actions" style="display:flex; gap:4px; align-items:center;">
+              <a href="/app/documents/{{ d.file_id }}/download" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">Download</a>
+              <button type="button" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;"
+                onclick="var r=this.closest('tr'); r.querySelector('.doc-edit').style.display='flex'; this.closest('.doc-actions').style.display='none';">Edit</button>
+              <form method="post" action="/app/entries/{{ entry.id }}/documents/{{ d.file_id }}/remove" style="display:inline; margin:0;"
+                    onsubmit="return confirm('Remove this document from the transaction?')">
+                <button type="submit" class="btn btn-ghost" style="padding:2px 8px; font-size:11px; color:#b91c1c;">Remove</button>
+              </form>
+            </div>
+            <form method="post" action="/app/entries/{{ entry.id }}/documents/{{ d.file_id }}/edit" class="doc-edit"
+                  style="display:none; gap:4px; align-items:center; flex-wrap:wrap;">
+              <select name="doc_type" style="font-size:11px; padding:2px 4px;">
+                <option value="receipt"{% if d.doc_type.as_str() == "receipt" %} selected{% endif %}>receipt</option>
+                <option value="invoice"{% if d.doc_type.as_str() == "invoice" %} selected{% endif %}>invoice</option>
+                <option value="contract"{% if d.doc_type.as_str() == "contract" %} selected{% endif %}>contract</option>
+                <option value="statement"{% if d.doc_type.as_str() == "statement" %} selected{% endif %}>statement</option>
+                <option value="tax"{% if d.doc_type.as_str() == "tax" %} selected{% endif %}>tax</option>
+                <option value="other"{% if d.doc_type.as_str() == "other" %} selected{% endif %}>other</option>
+              </select>
+              <input type="text" name="note" value="{{ d.note.as_deref().unwrap_or("") }}" placeholder="note"
+                     style="font-size:11px; padding:2px 6px; width:130px;">
+              <button type="submit" class="btn btn-primary" style="padding:2px 8px; font-size:11px;">Save</button>
+              <button type="button" class="btn btn-ghost" style="padding:2px 6px; font-size:11px;"
+                onclick="var r=this.closest('tr'); this.closest('.doc-edit').style.display='none'; r.querySelector('.doc-actions').style.display='flex';">✕</button>
+            </form>
+          </td>
         </tr>
       {% endfor %}
       </tbody>

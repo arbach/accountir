@@ -110,6 +110,9 @@ pub fn router() -> Router<AppState> {
             "/app/entries/{entry_id}/documents/upload",
             post(entry_document_upload).layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024)),
         )
+        .route("/app/entries/{entry_id}/documents/{file_id}/edit", post(entry_document_edit))
+        .route("/app/entries/{entry_id}/documents/{file_id}/remove", post(entry_document_remove))
+        .route("/app/entries/{entry_id}/note", post(entry_note_update))
         .route("/app/entries/{entry_id}/memo", post(entry_memo_update))
         .route("/app/reports", get(reports_index))
         .route("/app/reports/trial-balance", get(trial_balance))
@@ -175,6 +178,9 @@ struct AccountsListTpl {
     accounts: Vec<queries::AccountRow>,
     tax_line_options: Vec<queries::TaxLineOpt>,
     form_code: String,
+    start_str: String,
+    end_str: String,
+    total_display: String,
 }
 
 #[derive(Template)]
@@ -764,7 +770,17 @@ fn slugify(s: &str) -> String {
 // Accounts
 // ---------------------------------------------------------------------------
 
-async fn accounts_list(State(state): State<AppState>, jar: CookieJar) -> Response {
+#[derive(Deserialize)]
+struct AccountsFilterQuery {
+    start: Option<String>,
+    end: Option<String>,
+}
+
+async fn accounts_list(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(q): axum::extract::Query<AccountsFilterQuery>,
+) -> Response {
     let user = match require_user(&state, &jar).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -773,9 +789,14 @@ async fn accounts_list(State(state): State<AppState>, jar: CookieJar) -> Respons
         Some(c) => c,
         None => return forbidden(),
     };
-    let accounts = queries::list_accounts(&state.pool, company_id)
+    let start = q.start.as_deref().and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let end = q.end.as_deref().and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let accounts = queries::list_accounts_with_balances(&state.pool, company_id, start, end)
         .await
         .unwrap_or_default();
+    // Total money on the debit side (assets held + expenses booked); equal to the
+    // credit side in balanced books, so it reads as a real, non-zero total.
+    let total = accounts.iter().map(|a| a.balance_cents.max(0)).sum::<i64>();
     let form_code = queries::company_form_code(&state.pool, company_id).await;
     let tax_line_options = queries::tax_line_options(&form_code);
     render(AccountsListTpl {
@@ -786,6 +807,9 @@ async fn accounts_list(State(state): State<AppState>, jar: CookieJar) -> Respons
         accounts,
         tax_line_options,
         form_code,
+        start_str: start.map(|d| d.to_string()).unwrap_or_default(),
+        end_str: end.map(|d| d.to_string()).unwrap_or_default(),
+        total_display: queries::format_cents(total),
     })
 }
 
@@ -2863,6 +2887,89 @@ async fn entry_document_upload(
     if linked == 0 {
         return (StatusCode::BAD_REQUEST, "no file uploaded").into_response();
     }
+    Redirect::to(&format!("/app/entries/{entry_id}")).into_response()
+}
+
+#[derive(Deserialize)]
+struct EntryDocEditForm {
+    doc_type: String,
+    note: Option<String>,
+}
+
+/// POST /app/entries/{entry_id}/documents/{file_id}/edit — edit a supporting
+/// document's classification and note.
+async fn entry_document_edit(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path((entry_id, file_id)): axum::extract::Path<(String, String)>,
+    Form(req): Form<EntryDocEditForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let (Ok(eid), Ok(fid)) = (Uuid::parse_str(&entry_id), Uuid::parse_str(&file_id)) else {
+        return (StatusCode::BAD_REQUEST, "bad id").into_response();
+    };
+    let doc_type = match req.doc_type.trim() {
+        t @ ("receipt" | "invoice" | "contract" | "statement" | "tax" | "other") => t,
+        _ => "other",
+    };
+    let note = req.note.as_deref().unwrap_or("").trim();
+    let _ = crate::queries::annotate_entry_document(&state.pool, company_id, eid, fid, doc_type, note).await;
+    Redirect::to(&format!("/app/entries/{entry_id}")).into_response()
+}
+
+#[derive(Deserialize)]
+struct EntryNoteForm {
+    note: String,
+}
+
+/// POST /app/entries/{entry_id}/note — set the free-text note on a transaction.
+async fn entry_note_update(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Form(req): Form<EntryNoteForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let entry_id = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad entry id").into_response(),
+    };
+    let _ = crate::queries::set_entry_note(&state.pool, company_id, entry_id, &req.note).await;
+    Redirect::to(&format!("/app/entries/{id}")).into_response()
+}
+
+/// POST /app/entries/{entry_id}/documents/{file_id}/remove — detach a document.
+async fn entry_document_remove(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path((entry_id, file_id)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let (Ok(eid), Ok(fid)) = (Uuid::parse_str(&entry_id), Uuid::parse_str(&file_id)) else {
+        return (StatusCode::BAD_REQUEST, "bad id").into_response();
+    };
+    let _ = crate::queries::unlink_entry_document(&state.pool, company_id, eid, fid).await;
     Redirect::to(&format!("/app/entries/{entry_id}")).into_response()
 }
 

@@ -16,6 +16,15 @@ pub struct AccountRow {
     pub tax_line_field: Option<String>,
     pub tax_line_label: Option<String>,
     pub tax_line_status: Option<String>,
+    /// Signed balance (debit +, credit -) within the selected date range.
+    /// Zero when balances weren't requested (e.g. filter dropdowns).
+    pub balance_cents: i64,
+}
+
+impl AccountRow {
+    pub fn balance_display(&self) -> String {
+        format_cents(self.balance_cents)
+    }
 }
 
 /// One selectable tax-form line for the Accounts-page tax-line dropdown.
@@ -257,6 +266,61 @@ pub async fn list_accounts(pool: &PgPool, company_id: Uuid) -> AppResult<Vec<Acc
             tax_line_field: r.get(5),
             tax_line_label: r.get(6),
             tax_line_status: r.get(7),
+            balance_cents: 0,
+        })
+        .collect())
+}
+
+/// Chart of accounts with each account's signed balance (debit +, credit -)
+/// over the given date range (unbounded when start/end are None), skipping void
+/// entries. Ordered by account number.
+pub async fn list_accounts_with_balances(
+    pool: &PgPool,
+    company_id: Uuid,
+    start: Option<NaiveDate>,
+    end: Option<NaiveDate>,
+) -> AppResult<Vec<AccountRow>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT a.id, a.account_type::text, a.account_number, a.name, a.currency,
+               t.field, t.line_label, t.status,
+               COALESCE(SUM(jl.amount) FILTER (
+                   WHERE je.is_void = false
+                     AND ($2::date IS NULL OR je.date >= $2)
+                     AND ($3::date IS NULL OR je.date <= $3)
+               ), 0)::BIGINT AS balance_cents
+        FROM accounts a
+        LEFT JOIN tax_account_lines t
+               ON t.account_number = a.account_number AND t.company_id = a.company_id
+        LEFT JOIN journal_lines jl ON jl.account_id = a.id
+        LEFT JOIN journal_entries je ON je.id = jl.entry_id
+        WHERE a.is_active = true
+        GROUP BY a.id, a.account_type, a.account_number, a.name, a.currency,
+                 t.field, t.line_label, t.status
+        ORDER BY a.account_number ASC
+        "#,
+    )
+    .bind(company_id)
+    .bind(start)
+    .bind(end)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| AccountRow {
+            id: r.get(0),
+            account_type: r.get::<String, _>(1),
+            account_number: r.get(2),
+            name: r.get(3),
+            currency: r.get(4),
+            tax_line_field: r.get(5),
+            tax_line_label: r.get(6),
+            tax_line_status: r.get(7),
+            balance_cents: r.get(8),
         })
         .collect())
 }
@@ -1314,6 +1378,8 @@ pub struct EntryDetail {
     pub to: Option<Endpoint>,
     /// Supporting documents attached to this entry (receipts, invoices, …).
     pub documents: Vec<EntryDocument>,
+    /// Free-text user note on this transaction (entry_notes), if any.
+    pub note: Option<String>,
 }
 
 impl EntryDetail {
@@ -1496,6 +1562,12 @@ pub async fn get_entry_detail(
     })
     .collect();
 
+    let note: Option<String> = sqlx::query("SELECT note FROM entry_notes WHERE entry_id = $1")
+        .bind(entry_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(|r| r.get(0));
+
     tx.commit().await?;
 
     // From → To: money flows from the credited line (most negative) to the debited
@@ -1545,7 +1617,40 @@ pub async fn get_entry_detail(
         from,
         to,
         documents,
+        note,
     }))
+}
+
+/// Upsert (or clear, when empty) the free-text note on a transaction.
+pub async fn set_entry_note(
+    pool: &PgPool,
+    company_id: Uuid,
+    entry_id: Uuid,
+    note: &str,
+) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let note = note.trim();
+    if note.is_empty() {
+        sqlx::query("DELETE FROM entry_notes WHERE company_id = $1 AND entry_id = $2")
+            .bind(company_id)
+            .bind(entry_id)
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO entry_notes (company_id, entry_id, note) VALUES ($1, $2, $3)
+             ON CONFLICT (company_id, entry_id) DO UPDATE SET note = EXCLUDED.note, updated_at = now()",
+        )
+        .bind(company_id)
+        .bind(entry_id)
+        .bind(note)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Link an already-stored company file to a journal entry as a supporting
@@ -1571,6 +1676,26 @@ pub async fn link_entry_document(
     .bind(doc_type)
     .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Detach a supporting document from an entry (the file itself stays in the
+/// company document store).
+pub async fn unlink_entry_document(
+    pool: &PgPool,
+    company_id: Uuid,
+    entry_id: Uuid,
+    file_id: Uuid,
+) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query("DELETE FROM entry_documents WHERE entry_id = $1 AND file_id = $2")
+        .bind(entry_id)
+        .bind(file_id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(())
 }

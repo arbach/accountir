@@ -14,12 +14,39 @@
 <div class="page-header">
   <div>
     <h1>Chart of accounts</h1>
-    <div class="subtitle">{{ accounts.len() }} active accounts</div>
+    <div class="subtitle">{{ accounts.len() }} active accounts · debit-side total <strong>{{ total_display }}</strong></div>
   </div>
   <div class="actions">
     <a href="/app/accounts/new" class="btn btn-primary">+ New account</a>
   </div>
 </div>
+
+<form method="get" action="/app/accounts" class="card" style="margin-bottom: var(--gap);" data-remember="accounts">
+  <div class="form-row" style="grid-template-columns: repeat(3, minmax(120px, 200px)) auto; align-items: end; gap: 12px;">
+    <label class="field"><span class="label-text">Period</span>
+      <select onchange="datePreset(this)" title="Balances are summed over this date range">
+        <option value="">Preset…</option>
+        <option value="this_month">This month</option>
+        <option value="last_month">Last month</option>
+        <option value="this_quarter">This quarter</option>
+        <option value="last_quarter">Last quarter</option>
+        <option value="ytd">Year to date</option>
+        <option value="this_year">This year</option>
+        <option value="last_year">Last year</option>
+        <option value="y2024">2024</option>
+        <option value="y2023">2023</option>
+        <option value="y2022">2022</option>
+        <option value="last_12m">Last 12 months</option>
+        <option value="all">All time</option>
+      </select></label>
+    <label class="field"><span class="label-text">From</span><input type="date" name="start" value="{{ start_str }}"></label>
+    <label class="field"><span class="label-text">To</span><input type="date" name="end" value="{{ end_str }}"></label>
+    <div style="display:flex; gap:6px; align-items:end; padding-bottom:12px;">
+      <button type="submit" class="btn btn-secondary">Apply</button>
+      <a href="/app/accounts?cleared=1" class="btn btn-ghost" data-remember-clear="accounts">Clear</a>
+    </div>
+  </div>
+</form>
 
 {% if accounts.is_empty() %}
 <div class="empty">
@@ -30,7 +57,7 @@
 {% else %}
 <div class="table-wrap">
 <table>
-  <thead><tr><th style="width:80px">Number</th><th>Name</th><th style="width:110px">Type</th><th style="width:300px">Tax line ({{ form_code }})</th><th style="width:150px"></th></tr></thead>
+  <thead><tr><th style="width:80px">Number</th><th>Name</th><th style="width:110px">Type</th><th class="num" style="width:130px" title="Signed balance over the selected period (debit +, credit −)">Balance</th><th style="width:280px">Tax line ({{ form_code }})</th><th style="width:150px"></th></tr></thead>
   <tbody>
   {% for a in accounts %}
     <tr>
@@ -47,6 +74,7 @@
         </form>
       </td>
       <td><span class="badge">{{ a.account_type }}</span></td>
+      <td class="num"><a href="/app/transactions?account_id={{ a.id }}{% if start_str != "" %}&start={{ start_str }}{% endif %}{% if end_str != "" %}&end={{ end_str }}{% endif %}" style="color:inherit;" title="View transactions">{{ a.balance_display() }}</a></td>
       <td>
         {% if a.account_type == "revenue" || a.account_type == "expense" %}
         <div style="display:flex; align-items:center; gap:8px;">
@@ -80,6 +108,13 @@
     </tr>
   {% endfor %}
   </tbody>
+  <tfoot>
+    <tr>
+      <th colspan="3" style="text-align:right;">Debit-side total</th>
+      <th class="num">{{ total_display }}</th>
+      <th colspan="2"></th>
+    </tr>
+  </tfoot>
 </table>
 </div>
 {% endif %}
