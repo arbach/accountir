@@ -162,7 +162,7 @@ async function fillFormPdf(
   // font ensures all field values render correctly after flattening.
   const font = await doc.embedFont(StandardFonts.Helvetica);
   form.updateFieldAppearances(font);
-  form.flatten();
+  if (!Deno.env.get("NO_FLATTEN")) form.flatten(); // debug hook: keep AcroForm to verify /V
   return doc.save();
 }
 

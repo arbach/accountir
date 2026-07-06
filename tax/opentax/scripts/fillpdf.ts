@@ -40,6 +40,21 @@ for (const [k, v] of Object.entries(fill.lines ?? {})) {
   (pending[node] ??= {})[field] = v as number;
 }
 
+// The f1040 main-form descriptor reads pending["f1040"], but the engine spreads
+// 1040 line values across calc nodes (agi_aggregator, income_tax_calculation,
+// schedule1, standard_deduction, form8995, f8812, schedule3, …). Merge every
+// node's line* values into f1040 so the main form fills; the per-schedule
+// descriptors still read their own nodes.
+if (formCode === "f1040") {
+  const merged: Record<string, unknown> = {};
+  for (const dict of Object.values(pending)) {
+    for (const [k, v] of Object.entries(dict as Record<string, unknown>)) {
+      if (k.startsWith("line") && !(k in merged)) merged[k] = v;
+    }
+  }
+  pending["f1040"] = { ...merged, ...(pending["f1040"] ?? {}) };
+}
+
 const filer = fill.filer ??
   { data: { general: { corporation_name: filerName, ein: filerEin } } };
 
