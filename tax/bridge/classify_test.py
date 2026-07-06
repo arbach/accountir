@@ -83,6 +83,21 @@ def test_override_wins():
           "override reclassifies contractor → officer comp line 7")
 
 
+def test_equity_distributions():
+    # Owner's Draw on an S-corp → Schedule K line 16d distributions (basis-reducing).
+    r = one("3120", "Owner's Draw", "equity", -50000, form="f1120s")
+    check(r.category == "distributions" and r.field == "line16d_distributions",
+          "S-corp owner draw → Sch K-16d distributions")
+    check(any("basis" in f.lower() for f in r.flags), "distribution flags basis/16d treatment")
+    # On a C-corp / individual, distributions go to Schedule M-2 / basis, not a P&L line.
+    c = one("3120", "Owner's Draw", "equity", -50000, form="f1120")
+    check(c.node == "schedule_m2" and "basis" in (c.line_label or "").lower(),
+          "C-corp distribution → Sch M-2 / basis (not a deduction)")
+    # Non-distribution equity is not a tax-line item.
+    re = one("3900", "Retained Earnings", "equity", 0, form="f1120s")
+    check(re.unmatched, "retained earnings is not tax-classified")
+
+
 def test_mortgage_split_flag():
     r = one("5000", "Mortgage Payments - Fidelity (P&I undifferentiated)", "expense", -20000, form="f8825")
     check(r.category == "mortgage_pi" and any("SPLIT" in f for f in r.flags),

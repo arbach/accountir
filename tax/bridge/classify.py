@@ -94,8 +94,17 @@ RULES: list[Rule] = [
     Rule(r"property tax|real estate tax", "taxes_licenses", "expense"),
     Rule(r"depreciation|amortization|depletion|179", "depreciation", "expense"),
     Rule(r"advertis|marketing|promotion", "advertising", "expense"),
-    Rule(r"charitable|donation|contribution", "charitable", "expense",
+    Rule(r"charitable|donation", "charitable", "expense",
          flag="charitable — separately-stated on Sch K (S-corp) / limited on 1120 (C-corp)"),
+
+    # ── Equity: distributions & contributions (tax-relevant, NOT on the P&L) ──
+    Rule(r"owner'?s?\s*draw|owner draw|member'?s?\s*draw|shareholder distribution|"
+         r"\bdistribution|dividends?\s*paid", "distributions", "equity",
+         flag="distribution — S-corp: Sch K line 16d + K-1 box 16d; reduces stock basis "
+              "(distributions over basis = LTCG). NOT a deduction."),
+    Rule(r"capital contribution|owner'?s?\s*contribution|member contribution|paid.?in capital|"
+         r"owner'?s?\s*(equity|capital)", "contributions", "equity",
+         flag="capital contribution — increases stock basis (Schedule M-2). NOT income."),
 
     # ── Ordinary operating expenses (→ line 19 'other', itemized) ────────────
     Rule(r"meals? ?(&|and)? ?entertainment|meals?\b|entertainment", "meals", "expense",
@@ -164,6 +173,7 @@ CATEGORY_LINES: dict[str, dict[str, Line]] = {
         "pension":          Line("f1120s", "line17_pension_profit_sharing", "17 Pension/profit-sharing"),
         "benefits":         Line("f1120s", "line18_employee_benefits", "18 Employee benefit programs"),
         "charitable":       Line("schedule_k", "line12a_charitable", "Sch K-12a Charitable contributions", "abs", sep=True),
+        "distributions":    Line("schedule_k", "line16d_distributions", "Sch K-16d Distributions", "signed", sep=True),
         "meals":            Line("f1120s", "line19_other_deductions", "19 Other (meals, 50%)", factor=0.5),
         # everything else deductible → line 19 (itemized statement)
     },
@@ -247,6 +257,10 @@ _DEDUCTIBLE_EXPENSE_CATEGORIES = {
     "other_expense", "mortgage_pi",
 }
 
+# Equity categories: tax-relevant but not income/deduction lines. They land on
+# Schedule K-16d / Schedule M-2 and affect stock basis, not the P&L.
+_EQUITY_CATEGORIES = {"distributions", "contributions"}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Result type + classify()
@@ -324,6 +338,17 @@ def classify(account_number: str, name: str, account_type: str, amount: float,
         if category in _DEDUCTIBLE_EXPENSE_CATEGORIES and form in OTHER_LINE:
             line = OTHER_LINE[form]
             notes.append(f"no dedicated {form} line for '{category}' → line {line.field} (itemized statement)")
+        elif category in _EQUITY_CATEGORIES:
+            # Equity item (draw/contribution): no income/deduction line — it flows to
+            # Schedule M-2 / stock basis (and, for a C-corp, retained earnings). This is
+            # a correct, expected disposition, not an error.
+            label = ("Schedule M-2 / stock basis (distribution)" if category == "distributions"
+                     else "Schedule M-2 / stock basis (contribution)")
+            return Classification(
+                account_number, name, account_type, amount, category,
+                "schedule_m2", "basis_adjustment", label, "signed", True, amount, "high", matched,
+                flags=flags, notes=notes,
+            )
         else:
             return Classification(
                 account_number, name, account_type, amount, category,

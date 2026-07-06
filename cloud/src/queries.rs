@@ -49,6 +49,7 @@ pub fn tax_line_options(form_code: &str) -> Vec<TaxLineOpt> {
             mk("line19_charitable", "19 Charitable contributions", "f1120"),
             mk("line20_depreciation", "20 Depreciation", "f1120"),
             mk("line26_other_deductions", "26 Other deductions", "f1120"),
+            mk("basis_adjustment", "Sch M-2 / retained earnings (equity)", "schedule_m2"),
         ],
         "f1040" => vec![
             mk("line2b_interest", "Sch B — Interest income", "start"),
@@ -57,6 +58,7 @@ pub fn tax_line_options(form_code: &str) -> Vec<TaxLineOpt> {
             mk("line5_schedule_e", "Sch E — Passthrough/rental (K-1)", "start"),
             mk("schedule1_other_income", "Sch 1 — Other income", "start"),
             mk("schedule1_hsa", "Sch 1 — HSA adjustment", "start"),
+            mk("basis_adjustment", "Owner draw / basis — not reportable", "schedule_m2"),
         ],
         // default: f1120s (S-corp) — page 1 + separately-stated (Sch K) + rentals (8825)
         _ => vec![
@@ -86,6 +88,8 @@ pub fn tax_line_options(form_code: &str) -> Vec<TaxLineOpt> {
             mk("expense_utilities", "8825 — Utilities", "f8825"),
             mk("expense_depreciation", "8825 — Depreciation", "f8825"),
             mk("expense_other", "8825 — Other", "f8825"),
+            mk("line16d_distributions", "Sch K-16d — Distributions (equity)", "schedule_k"),
+            mk("basis_adjustment", "Sch M-2 / stock basis (equity)", "schedule_m2"),
         ],
     }
 }

@@ -4,6 +4,24 @@
   "version": 1,
   "source_year": 2025,
   "accounts": {
+    "3200": {
+      "name": "Owner Draws & Personal Transfers",
+      "category": "distributions",
+      "node": "schedule_m2",
+      "field": "basis_adjustment",
+      "line": "Schedule M-2 / stock basis (distribution)",
+      "sign": "signed",
+      "sep": true,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "distribution \u2014 S-corp: Sch K line 16d + K-1 box 16d; reduces stock basis (distributions over basis = LTCG). NOT a deduction."
+      ],
+      "notes": []
+    },
     "4100": {
       "name": "Schedule E - SweetHome S-Corp",
       "category": "k1_passthrough",
@@ -36,6 +54,22 @@
       "flags": [],
       "notes": []
     },
+    "4500": {
+      "name": "Other Income",
+      "category": "other_income",
+      "node": "start",
+      "field": "schedule1_other_income",
+      "line": "Sch 1 \u2014 Other income",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
     "4600": {
       "name": "Schedule B - Interest Income",
       "category": "interest_income",
@@ -64,6 +98,22 @@
       "excluded": false,
       "splits": null,
       "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "4800": {
+      "name": "Other Income (Schedule 1)",
+      "category": "other_income",
+      "node": "start",
+      "field": "schedule1_other_income",
+      "line": "Sch 1 \u2014 Other income",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
       "status": "auto",
       "flags": [],
       "notes": []
@@ -131,6 +181,25 @@
       "status": "auto",
       "flags": [
         "'bank_fees' has no f1040 line and is not sweepable \u2014 assign manually"
+      ],
+      "notes": []
+    },
+    "9999": {
+      "name": "Uncategorized",
+      "category": "other_expense",
+      "node": null,
+      "field": null,
+      "line": null,
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "low",
+      "status": "auto",
+      "flags": [
+        "uncategorized/misc \u2014 needs an account-level breakdown for the return",
+        "'other_expense' has no f1040 line and is not sweepable \u2014 assign manually"
       ],
       "notes": []
     }

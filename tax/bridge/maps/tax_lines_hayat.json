@@ -4,6 +4,24 @@
   "version": 1,
   "source_year": 2025,
   "accounts": {
+    "3120": {
+      "name": "Owner's Draw",
+      "category": "distributions",
+      "node": "schedule_k",
+      "field": "line16d_distributions",
+      "line": "Sch K-16d Distributions",
+      "sign": "signed",
+      "sep": true,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "distribution \u2014 S-corp: Sch K line 16d + K-1 box 16d; reduces stock basis (distributions over basis = LTCG). NOT a deduction."
+      ],
+      "notes": []
+    },
     "4000": {
       "name": "Service Revenue",
       "category": "service_revenue",

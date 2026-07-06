@@ -28,9 +28,11 @@ def generate(entity: str, year: int) -> dict:
     # Classify EVERY active income/expense account (not just those with activity),
     # so the chart of accounts is fully tax-mapped and future transactions land right.
     amounts = {num: amt for num, _n, _t, amt in pull_pl(cid, year)}
+    # Include equity accounts too — owner draws / distributions / contributions are
+    # tax-relevant (Sch K-16d / M-2 / basis), even though they're not on the P&L.
     accts = psql(f"""
         SELECT account_number, name, account_type FROM accounts
-        WHERE company_id = '{cid}' AND account_type IN ('revenue','expense') AND is_active
+        WHERE company_id = '{cid}' AND account_type IN ('revenue','expense','equity') AND is_active
         ORDER BY account_number;""")
     if not accts:
         sys.exit(f"no accounts for {entity}")
@@ -40,6 +42,10 @@ def generate(entity: str, year: int) -> dict:
     for num, name, typ in accts:
         amt = amounts.get(num, 0.0)
         c = C.classify(num, name, typ, amt, cform)
+        # Non-distribution equity (retained earnings, common stock, opening balance)
+        # is not a tax-line item — don't clutter the tag store with it.
+        if typ == "equity" and c.category not in C._EQUITY_CATEGORIES:
+            continue
         fresh["accounts"][num] = T.classification_to_tag(c)
 
     merged = T.merge(T.load_tags(entity), fresh)

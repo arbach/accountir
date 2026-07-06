@@ -4,8 +4,162 @@
   "version": 1,
   "source_year": 2025,
   "accounts": {
+    "3000": {
+      "name": "Owner's Capital",
+      "category": "contributions",
+      "node": "schedule_m2",
+      "field": "basis_adjustment",
+      "line": "Schedule M-2 / stock basis (contribution)",
+      "sign": "signed",
+      "sep": true,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "capital contribution \u2014 increases stock basis (Schedule M-2). NOT income."
+      ],
+      "notes": []
+    },
+    "3110": {
+      "name": "Owner's Capital: Owner's Investment (3110)",
+      "category": "contributions",
+      "node": "schedule_m2",
+      "field": "basis_adjustment",
+      "line": "Schedule M-2 / stock basis (contribution)",
+      "sign": "signed",
+      "sep": true,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "capital contribution \u2014 increases stock basis (Schedule M-2). NOT income."
+      ],
+      "notes": []
+    },
+    "3120": {
+      "name": "Owner's Capital: Owner's Draw (3120)",
+      "category": "distributions",
+      "node": "schedule_m2",
+      "field": "basis_adjustment",
+      "line": "Schedule M-2 / stock basis (distribution)",
+      "sign": "signed",
+      "sep": true,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "distribution \u2014 S-corp: Sch K line 16d + K-1 box 16d; reduces stock basis (distributions over basis = LTCG). NOT a deduction."
+      ],
+      "notes": []
+    },
+    "3130": {
+      "name": "Owner's Capital: Owner's Billable Time (3130)",
+      "category": "contributions",
+      "node": "schedule_m2",
+      "field": "basis_adjustment",
+      "line": "Schedule M-2 / stock basis (contribution)",
+      "sign": "signed",
+      "sep": true,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "capital contribution \u2014 increases stock basis (Schedule M-2). NOT income."
+      ],
+      "notes": []
+    },
+    "3200": {
+      "name": "Owner's Draw",
+      "category": "distributions",
+      "node": "schedule_m2",
+      "field": "basis_adjustment",
+      "line": "Schedule M-2 / stock basis (distribution)",
+      "sign": "signed",
+      "sep": true,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "distribution \u2014 S-corp: Sch K line 16d + K-1 box 16d; reduces stock basis (distributions over basis = LTCG). NOT a deduction."
+      ],
+      "notes": []
+    },
+    "4000": {
+      "name": "Technology Services Revenue",
+      "category": "service_revenue",
+      "node": "f1120",
+      "field": "line1a_gross_receipts",
+      "line": "1a Gross receipts",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "4100": {
+      "name": "Management Fee Income",
+      "category": "service_revenue",
+      "node": "f1120",
+      "field": "line1a_gross_receipts",
+      "line": "1a Gross receipts",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
     "4200": {
       "name": "Consulting Income (4200)",
+      "category": "service_revenue",
+      "node": "f1120",
+      "field": "line1a_gross_receipts",
+      "line": "1a Gross receipts",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "4250": {
+      "name": "Grant Income - Stellar (4250)",
+      "category": "grant_income",
+      "node": "f1120",
+      "field": "line10_other_income",
+      "line": "10 Other income",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "4300": {
+      "name": "Service (4300)",
       "category": "service_revenue",
       "node": "f1120",
       "field": "line1a_gross_receipts",
@@ -36,6 +190,54 @@
       "flags": [],
       "notes": []
     },
+    "4400": {
+      "name": "Markup on Reimbursable Expenses (4400)",
+      "category": "service_revenue",
+      "node": "f1120",
+      "field": "line1a_gross_receipts",
+      "line": "1a Gross receipts",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "4710": {
+      "name": "Uncategorized Income (4710)",
+      "category": "other_income",
+      "node": "f1120",
+      "field": "line10_other_income",
+      "line": "10 Other income",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "4715": {
+      "name": "Other Income (4715)",
+      "category": "other_income",
+      "node": "f1120",
+      "field": "line10_other_income",
+      "line": "10 Other income",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
     "4800": {
       "name": "Interest Income",
       "category": "interest_income",
@@ -43,6 +245,70 @@
       "field": "line5_interest",
       "line": "5 Interest",
       "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "4820": {
+      "name": "Vendor Refunds (4820)",
+      "category": "other_income",
+      "node": "f1120",
+      "field": "line10_other_income",
+      "line": "10 Other income",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "4900": {
+      "name": "Other Income",
+      "category": "other_income",
+      "node": "f1120",
+      "field": "line10_other_income",
+      "line": "10 Other income",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "5000": {
+      "name": "Cost of Goods Sold (5000)",
+      "category": "cogs",
+      "node": "f1120",
+      "field": "line2_cogs",
+      "line": "2 Cost of goods sold",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "5100": {
+      "name": "Purchase Discount (5100)",
+      "category": "cogs",
+      "node": "f1120",
+      "field": "line2_cogs",
+      "line": "2 Cost of goods sold",
+      "sign": "abs",
       "sep": false,
       "factor": null,
       "excluded": false,
@@ -104,6 +370,24 @@
       "flags": [],
       "notes": [
         "no dedicated f1120 line for 'bank_fees' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6110": {
+      "name": "Automobile Expense (6110)",
+      "category": "auto",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'auto' \u2192 line line26_other_deductions (itemized statement)"
       ]
     },
     "6120": {
@@ -178,6 +462,24 @@
     },
     "6160": {
       "name": "Advertising & Marketing (6160)",
+      "category": "advertising",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'advertising' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6170": {
+      "name": "Marketing Expense (6170)",
       "category": "advertising",
       "node": "f1120",
       "field": "line26_other_deductions",
@@ -340,6 +642,26 @@
         "no dedicated f1120 line for 'professional_fees' \u2192 line line26_other_deductions (itemized statement)"
       ]
     },
+    "6400": {
+      "name": "Reimbursable Expense (6400)",
+      "category": "other_expense",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [
+        "uncategorized/misc \u2014 needs an account-level breakdown for the return"
+      ],
+      "notes": [
+        "no dedicated f1120 line for 'other_expense' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
     "6450": {
       "name": "Rent Expense (6450)",
       "category": "rent",
@@ -356,6 +678,42 @@
       "flags": [],
       "notes": [
         "no dedicated f1120 line for 'rent' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6451": {
+      "name": "Lease Expense (6451)",
+      "category": "rent",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'rent' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6460": {
+      "name": "Repairs & Maintenance (6460)",
+      "category": "repairs",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'repairs' \u2192 line line26_other_deductions (itemized statement)"
       ]
     },
     "6470": {
@@ -430,6 +788,56 @@
         "no dedicated f1120 line for 'repairs' \u2192 line line26_other_deductions (itemized statement)"
       ]
     },
+    "6680": {
+      "name": "Wages & Salaries (6680)",
+      "category": "wages",
+      "node": "f1120",
+      "field": "line13_salaries_wages",
+      "line": "13 Salaries and wages",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "6720": {
+      "name": "Payroll Tax Expense (6720)",
+      "category": "taxes_licenses",
+      "node": "f1120",
+      "field": "line17_taxes_licenses",
+      "line": "17 Taxes and licenses",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "6722": {
+      "name": "Mileage Reimbursement (6722)",
+      "category": "auto",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'auto' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
     "6800": {
       "name": "Charitable Donations (6800)",
       "category": "charitable",
@@ -448,6 +856,60 @@
       ],
       "notes": []
     },
+    "6900": {
+      "name": "Bad Debt (6900)",
+      "category": "bad_debt",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'bad_debt' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "7000": {
+      "name": "Depreciation (7000)",
+      "category": "depreciation",
+      "node": "f1120",
+      "field": "line20_depreciation",
+      "line": "20 Depreciation",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "7050": {
+      "name": "Miscellaneous (7050)",
+      "category": "other_expense",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [
+        "uncategorized/misc \u2014 needs an account-level breakdown for the return"
+      ],
+      "notes": [
+        "no dedicated f1120 line for 'other_expense' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
     "7150": {
       "name": "Other Expense (7150)",
       "category": "other_expense",
@@ -463,6 +925,66 @@
       "status": "auto",
       "flags": [
         "uncategorized/misc \u2014 needs an account-level breakdown for the return"
+      ],
+      "notes": [
+        "no dedicated f1120 line for 'other_expense' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "8100": {
+      "name": "Bank Revaluations (8100)",
+      "category": "other_expense",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [
+        "FX/revaluation booked as expense \u2014 often book-only/unrealized; confirm M-1 treatment (may be non-deductible)"
+      ],
+      "notes": [
+        "no dedicated f1120 line for 'other_expense' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "8150": {
+      "name": "Unrealized Currency Gains (8150)",
+      "category": "other_expense",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [
+        "FX/revaluation booked as expense \u2014 often book-only/unrealized; confirm M-1 treatment (may be non-deductible)"
+      ],
+      "notes": [
+        "no dedicated f1120 line for 'other_expense' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "8200": {
+      "name": "Realized Currency Gains (8200)",
+      "category": "other_expense",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [
+        "FX/revaluation booked as expense \u2014 often book-only/unrealized; confirm M-1 treatment (may be non-deductible)"
       ],
       "notes": [
         "no dedicated f1120 line for 'other_expense' \u2192 line line26_other_deductions (itemized statement)"

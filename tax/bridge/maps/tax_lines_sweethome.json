@@ -4,6 +4,24 @@
   "version": 1,
   "source_year": 2025,
   "accounts": {
+    "3100": {
+      "name": "Member's Draws",
+      "category": "distributions",
+      "node": "schedule_m2",
+      "field": "basis_adjustment",
+      "line": "Schedule M-2 / stock basis (distribution)",
+      "sign": "signed",
+      "sep": true,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "distribution \u2014 S-corp: Sch K line 16d + K-1 box 16d; reduces stock basis (distributions over basis = LTCG). NOT a deduction."
+      ],
+      "notes": []
+    },
     "4000": {
       "name": "Rental Income - 11211 Norby Rd, Kansas City MO",
       "category": "rental_income",
@@ -50,6 +68,24 @@
       "confidence": "high",
       "status": "auto",
       "flags": [],
+      "notes": []
+    },
+    "5000": {
+      "name": "Mortgage Payments - Fidelity (P&I undifferentiated)",
+      "category": "mortgage_pi",
+      "node": "f8825",
+      "field": "expense_interest",
+      "line": "9 Interest (from P&I \u2014 principal excluded)",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "mortgage P&I undifferentiated \u2014 SPLIT principal (non-deductible) vs interest (deductible)"
+      ],
       "notes": []
     },
     "5100": {
