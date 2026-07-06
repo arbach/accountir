@@ -24,10 +24,10 @@ from collections import defaultdict
 
 import classify as C
 import tags as T
-from export_return import psql, deno, ENTITIES, load_map
+from export_return import psql, deno, ENTITIES, load_map, set_db_tenant
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR = os.path.join(HERE, "out")
+OUT_DIR = os.environ.get("BRIDGE_OUT", os.path.join(HERE, "out"))
 
 # Rental-only S-corps file Form 1120-S but their income/expenses are separately
 # stated on Form 8825 (→ Schedule K line 2), NOT page-1 ordinary. So their accounts
@@ -79,6 +79,7 @@ def build(entity, year, form):
     if not rows:
         sys.exit(f"no company matching '{entity}'")
     cid = rows[0][0]
+    set_db_tenant(cid)   # scope RLS to this company (DATABASE_URL / app-role runs)
     pl = pull_pl(cid, year)
     if not pl:
         sys.exit(f"no {year} ledger for {entity}")

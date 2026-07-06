@@ -11,6 +11,12 @@
 </div>
 {% endif %}
 
+{% if flash.is_some() %}
+<div class="card" style="margin-bottom: var(--gap); border-left:4px solid {% if flash_kind.as_deref() == Some("error") %}#dc2626{% else %}#16a34a{% endif %};">
+  <div style="font-size:13px;">{{ flash.as_deref().unwrap_or("") }}</div>
+</div>
+{% endif %}
+
 <div class="card" style="margin-bottom: var(--gap);">
   <div class="card-title" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
     <span>Filing progress</span>
@@ -82,7 +88,19 @@
 {% if view_step == 2 %}
 <div class="card" style="margin-bottom: var(--gap);">
   <div class="card-title">Step 2 · Books review &amp; tax-line mapping</div>
-  <p class="muted" style="font-size:13px; margin-top:4px;">Before any numbers are used, the books are reviewed (transfers, duplicates, credit cards) and every ledger account is mapped to the tax-form line it belongs on. Edit any account's tax line on the Accounts page.</p>
+  <p class="muted" style="font-size:13px; margin-top:4px;">Before any numbers are used, the books are reviewed (transfers, duplicates, credit cards) and every ledger account is mapped to the tax-form line it belongs on. This mapping drives the whole return and carries forward each year — edit it on the Accounts page.</p>
+  {% if total_accounts > 0 %}
+  <div style="margin:12px 0; padding:12px 14px; border-radius:8px; background:var(--surface-2, #f4f6fb);">
+    <div style="display:flex; justify-content:space-between; align-items:center; font-size:13px;">
+      <strong>Tax-line mapping</strong>
+      {% if tagged_accounts >= total_accounts %}
+      <span class="badge" style="background:#16a34a; color:#fff;">{{ tagged_accounts }}/{{ total_accounts }} accounts mapped ✓</span>
+      {% else %}
+      <span class="badge" style="background:#d97706; color:#fff;">{{ tagged_accounts }}/{{ total_accounts }} mapped — {{ total_accounts - tagged_accounts }} unmapped</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
   <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
     <a href="/app/accounts" class="btn btn-secondary" style="font-size:12px; padding:4px 12px;">Review account → tax-line mapping →</a>
     <a href="/app/reports/income" class="btn btn-ghost" style="font-size:12px; padding:4px 12px;">Income statement →</a>
@@ -92,6 +110,17 @@
 {% endif %}
 
 {% if view_step >= 3 %}
+{% if can_compute %}
+<div class="card" style="margin-bottom: var(--gap); display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap;">
+  <div>
+    <strong style="font-size:13px;">Step 4 · Compute &amp; fill from the ledger (OpenTax)</strong>
+    <div class="muted" style="font-size:12px; max-width:60ch;">The engine computes every line from the ledger and your step-2 tax-line mapping, and reconciles to the books — the deterministic source of every number. Deno-computed, no hand math. Fill each pulled form from this output.</div>
+  </div>
+  <form method="post" action="/app/tax/compute" style="margin:0;">
+    <button type="submit" class="btn btn-primary" style="white-space:nowrap;" title="Run the OpenTax engine on the ledger + tax-line tags and reconcile">⚙ Compute from ledger</button>
+  </form>
+</div>
+{% endif %}
 <div class="card" id="tax-forms-card">
   <div class="card-title" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
     <span>Forms in the pipeline</span>

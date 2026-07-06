@@ -90,6 +90,36 @@ pub fn tax_line_options(form_code: &str) -> Vec<TaxLineOpt> {
     }
 }
 
+/// Step-2 tax-line mapping coverage: (tagged, total) active income/expense accounts.
+pub async fn tagging_coverage(pool: &PgPool, company_id: Uuid) -> (i64, i64) {
+    let mut conn = match pool.acquire().await {
+        Ok(c) => c,
+        Err(_) => return (0, 0),
+    };
+    let mut tx = match conn.begin().await {
+        Ok(t) => t,
+        Err(_) => return (0, 0),
+    };
+    let _ = set_tenant(&mut tx, company_id).await;
+    let row = sqlx::query(
+        r#"
+        SELECT count(*) FILTER (WHERE a.account_type IN ('revenue','expense')) AS total,
+               count(*) FILTER (WHERE a.account_type IN ('revenue','expense') AND t.field IS NOT NULL) AS tagged
+        FROM accounts a
+        LEFT JOIN tax_account_lines t
+               ON t.account_number = a.account_number AND t.company_id = a.company_id
+        WHERE a.is_active = true
+        "#,
+    )
+    .fetch_one(&mut *tx)
+    .await;
+    let _ = tx.commit().await;
+    match row {
+        Ok(r) => (r.get::<i64, _>("tagged"), r.get::<i64, _>("total")),
+        Err(_) => (0, 0),
+    }
+}
+
 /// Federal form for a company, derived from its tax profile's entity_type.
 pub async fn company_form_code(pool: &PgPool, company_id: Uuid) -> String {
     let mut conn = match pool.acquire().await {

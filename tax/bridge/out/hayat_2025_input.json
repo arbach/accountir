@@ -16,8 +16,8 @@
     {
       "node_type": "f1120s",
       "data": {
-        "line1a_gross_receipts": 110000.0,
-        "line19_other_deductions": 136377.24,
+        "line1a_gross_receipts": 90000.0,
+        "line19_other_deductions": 114413.04,
         "line12_taxes": 225.0
       }
     }

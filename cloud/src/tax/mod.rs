@@ -345,6 +345,93 @@ fn run_pdfform(args: &[&str]) -> Result<Value, String> {
     Ok(v)
 }
 
+// ─── OpenTax engine of record (deterministic compute) ──────────────────────────
+
+/// Result of a deterministic OpenTax compute for one entity-year.
+pub struct ComputeResult {
+    pub form: String,
+    pub reconciles: bool,
+    pub computed: f64,
+    pub lines: usize,
+}
+
+fn bridge_dir() -> String {
+    std::env::var("BRIDGE_DIR").unwrap_or_else(|_| "/usr/local/lib/accountir/tax/bridge".to_string())
+}
+
+/// Map a company (its slug and/or legal name) to the OpenTax bridge entity key.
+pub fn bridge_entity_key(text: &str) -> Option<&'static str> {
+    let s = text.to_lowercase();
+    if s.contains("sweethome") || s.contains("sweet home") {
+        Some("sweethome")
+    } else if s.contains("hayat") {
+        Some("hayat")
+    } else if s.contains("maven") {
+        Some("maven")
+    } else if s.contains("on-chain") || s.contains("onchain") {
+        Some("on-chain")
+    } else if s.contains("arbach") || s.contains("michael") {
+        Some("michael")
+    } else {
+        None
+    }
+}
+
+/// Run the OpenTax bridge (step4.py --fill) for one entity-year and parse its
+/// output — the deterministic calculation of record: ledger + tax-line tags →
+/// engine → reconciled line values. Blocking (shells to python/deno); call from
+/// spawn_blocking. DATABASE_URL is inherited from the app process environment.
+pub fn compute_return(entity_key: &str, year: i32) -> Result<ComputeResult, String> {
+    let out_dir =
+        std::env::var("BRIDGE_OUT").unwrap_or_else(|_| "/var/lib/accountir-cloud/tax-out".to_string());
+    let deno_dir =
+        std::env::var("DENO_DIR").unwrap_or_else(|_| "/var/lib/accountir-cloud/.deno".to_string());
+    // Corporates compute from the ledger + tax-line tags (step4.py). An individual
+    // 1040 aggregates source-document K-1s/1099s/8949, so it computes from the
+    // source-grounded map (export_return.py). Both emit the same fill JSON.
+    let (script, extra): (&str, &[&str]) = if entity_key == "michael" {
+        ("export_return.py", &["--compute"])
+    } else {
+        ("step4.py", &[])
+    };
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut args: Vec<String> = vec![
+        format!("{}/{script}", bridge_dir()),
+        "--entity".into(), entity_key.into(),
+        "--year".into(), year.to_string(),
+        "--fill".into(),
+    ];
+    args.extend(extra.iter().map(|s| s.to_string()));
+    let output = std::process::Command::new("python3")
+        .args(&args)
+        .env("BRIDGE_OUT", &out_dir)
+        .env("DENO_DIR", &deno_dir)
+        .env("PATH", format!("/usr/local/bin:/usr/bin:/bin:{path}"))
+        .output()
+        .map_err(|e| format!("engine failed to start: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg: String = stderr
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("engine error")
+            .chars()
+            .take(200)
+            .collect();
+        return Err(msg);
+    }
+    let path = format!("{out_dir}/{entity_key}_{year}_fill.json");
+    let data = std::fs::read_to_string(&path).map_err(|e| format!("no engine output: {e}"))?;
+    let v: Value = serde_json::from_str(&data).map_err(|e| format!("bad engine output: {e}"))?;
+    Ok(ComputeResult {
+        form: v.get("form").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        reconciles: v.get("reconciles").and_then(|x| x.as_bool()).unwrap_or(false),
+        computed: v.get("computed").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        lines: v.get("lines").and_then(|x| x.as_object()).map(|o| o.len()).unwrap_or(0),
+    })
+}
+
 /// Sanity-check a form code before it becomes part of a URL/path:
 /// IRS form file names are short lowercase alphanumerics (f1040sc, f1120s…).
 fn valid_form_code(code: &str) -> bool {

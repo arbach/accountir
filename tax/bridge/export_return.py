@@ -22,7 +22,9 @@ import argparse, json, os, subprocess, sys
 DB = "accountir_cloud"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAPS_DIR = os.path.join(HERE, "maps")
-OUT_DIR = os.path.join(HERE, "out")
+# Output dir is env-configurable so the bridge can run from a read-only install
+# (e.g. the app service writes to a data dir it owns).
+OUT_DIR = os.environ.get("BRIDGE_OUT", os.path.join(HERE, "out"))
 OPENTAX = os.path.join(HERE, "..", "opentax", "cli", "main.ts")
 
 # slug fragment -> (label, entity_type, federal form)
@@ -63,19 +65,53 @@ RECON_SUM = {
 }
 
 
+# When running via DATABASE_URL as the (non-superuser, RLS-enforced) app role, every
+# tenant-scoped query must run with app.company_id set or RLS returns nothing. The
+# `sudo -u postgres` path is superuser and bypasses RLS, so no tenant is needed there.
+_TENANT = None
+
+
+def set_db_tenant(cid):
+    """Scope subsequent DATABASE_URL queries to one company (for RLS)."""
+    global _TENANT
+    _TENANT = cid
+
+
 def psql(sql):
-    r = subprocess.run(["sudo", "-u", "postgres", "psql", DB, "-tAF\t", "-c", sql],
-                       capture_output=True, text=True)
+    # Portable DB access: prefer DATABASE_URL (so the bridge runs as any user — e.g.
+    # the accountir-cloud app service). Fall back to `sudo -u postgres` for local/dev.
+    url = os.environ.get("DATABASE_URL")
+    env = None
+    if url:
+        cmd = ["psql", url, "-tAF\t", "-c", sql]
+        if _TENANT:
+            # Set the tenant GUC at connection time — no in-band SET statement, so
+            # nothing pollutes the tuple output.
+            env = {**os.environ, "PGOPTIONS": f"-c app.company_id={_TENANT}"}
+    else:
+        cmd = ["sudo", "-u", "postgres", "psql", DB, "-tAF\t", "-c", sql]
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if r.returncode != 0:
         sys.exit(f"psql error: {r.stderr}")
     return [ln.split("\t") for ln in r.stdout.strip().splitlines() if ln]
 
 
 def deno(*args):
+    # Use a deno on PATH (system install) if present, else the user-local install.
+    # DENO_DIR must be writable by the running user; default to a per-process temp so
+    # the app service (whose $HOME may be non-writable) can still cache.
+    local_bin = os.path.expanduser("~/.deno/bin")
+    path = os.environ.get("PATH", "")
+    if os.path.isdir(local_bin):
+        path = local_bin + ":" + path
+    env = {**os.environ, "PATH": path}
+    env.setdefault("DENO_DIR", os.environ.get("DENO_DIR", "/tmp/.deno-cache"))
+    # The engine writes its return state to .state/ relative to cwd — run it from a
+    # writable output dir so it works from a read-only install (app-service user).
+    os.makedirs(OUT_DIR, exist_ok=True)
     r = subprocess.run(
-        ["deno", "run", "--allow-read", "--allow-write", "--allow-run", OPENTAX, *args],
-        capture_output=True, text=True,
-        env={**os.environ, "PATH": os.path.expanduser("~/.deno/bin") + ":" + os.environ.get("PATH", "")},
+        ["deno", "run", "--allow-read", "--allow-write", "--allow-run", "--allow-env", OPENTAX, *args],
+        capture_output=True, text=True, env=env, cwd=OUT_DIR,
     )
     if r.returncode != 0:
         sys.exit(f"opentax error ({' '.join(args[:3])}): {r.stderr}\n{r.stdout}")
@@ -227,6 +263,8 @@ def main():
     ap.add_argument("--year", type=int, default=2025)
     ap.add_argument("--compute", action="store_true", help="compute via OpenTax and reconcile")
     ap.add_argument("--state", action="store_true", help="also chain the federal result into the IL state form")
+    ap.add_argument("--fill", action="store_true",
+                    help="write the full computed line set (engine output) to out/<entity>_<year>_fill.json")
     args = ap.parse_args()
     label, etype, form = ENTITIES[args.entity]
 
@@ -234,6 +272,7 @@ def main():
     if not rows:
         sys.exit(f"no company matching '{args.entity}'")
     cid, slug = rows[0]
+    set_db_tenant(cid)   # scope RLS to this company (DATABASE_URL / app-role runs)
 
     themap, map_path = load_map(form, args.year, args.entity)
 
@@ -263,10 +302,32 @@ def main():
         for acct_no, name, amt in unmapped:
             print(f"    {acct_no}  {name:<40} {amt:>14,.2f}")
 
-    if args.compute or args.state:
+    if args.compute or args.state or args.fill:
         result = compute_and_reconcile(bundle, form, book_net)
         if args.state:
             compute_state_il(args.entity, args.year, form, result.get("pending", {}))
+        if args.fill:
+            pend = result.get("pending", {})
+            if form in RECON_SUM:
+                computed = round(sum(_scalar(pend.get(n, {}).get(f)) for n, f in RECON_SUM[form]), 2)
+            else:
+                n, f = RECON_SINGLE[form]
+                computed = round(_scalar(pend.get(n, {}).get(f)), 2)
+            delta = round(computed - book_net, 2)
+            lines = {}
+            for node, flds in pend.items():
+                if not isinstance(flds, dict):
+                    continue
+                for fld, v in flds.items():
+                    v = v[-1] if isinstance(v, list) else v
+                    if isinstance(v, (int, float)):
+                        lines[f"{node}.{fld}"] = round(float(v), 2)
+            fill = {"entity": args.entity, "form": form, "year": args.year,
+                    "reconciles": abs(delta) < 0.5, "delta": delta,
+                    "book_net": book_net, "computed": computed, "lines": dict(sorted(lines.items()))}
+            with open(os.path.join(OUT_DIR, f"{args.entity}_{args.year}_fill.json"), "w") as f2:
+                json.dump(fill, f2, indent=2)
+            print(f"  engine fill output ({len(lines)} lines) → {args.entity}_{args.year}_fill.json")
 
 
 if __name__ == "__main__":

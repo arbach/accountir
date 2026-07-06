@@ -82,6 +82,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/chat/stop", post(chat_stop))
         .route("/app/dashboard", get(dashboard))
         .route("/app/tax", get(tax_filing))
+        .route("/app/tax/compute", post(tax_compute))
         .route("/app/tax/profile", post(tax_profile_save))
         .route(
             "/app/tax/profile/upload",
@@ -2834,10 +2835,45 @@ struct TaxStepTpl {
 }
 
 /// `?step=N` lets the user move back and forth through the pipeline to view or
-/// revisit any step, independent of where the pipeline actually is.
+/// revisit any step, independent of where the pipeline actually is. The `c*`
+/// params carry the result of a Compute action back for a flash message.
 #[derive(serde::Deserialize)]
 struct TaxStepQuery {
     step: Option<u8>,
+    cform: Option<String>,
+    cval: Option<f64>,
+    cok: Option<u8>,
+    cerr: Option<String>,
+}
+
+/// POST /app/tax/compute — run the OpenTax engine of record for the active
+/// company (ledger + tax-line tags → reconciled lines), then bounce back to
+/// step 4 with the result. Deterministic: no free-form agent involved.
+async fn tax_compute(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    if active_company(&state, &jar, user.id).await.is_none() {
+        return forbidden();
+    }
+    let nav = build_nav(&state, &jar, user.id).await;
+    use chrono::Datelike;
+    let year = Utc::now().date_naive().year() - 1;
+    let key = crate::tax::bridge_entity_key(&nav.active_company_name);
+    let target = match key {
+        None => "/app/tax?step=4&cerr=no-mapping".to_string(),
+        Some(k) => match tokio::task::spawn_blocking(move || crate::tax::compute_return(k, year)).await {
+            Ok(Ok(r)) => format!(
+                "/app/tax?step=4&cform={}&cval={:.2}&cok={}",
+                r.form,
+                r.computed,
+                if r.reconciles { 1 } else { 0 }
+            ),
+            Ok(Err(_)) | Err(_) => "/app/tax?step=4&cerr=compute-failed".to_string(),
+        },
+    };
+    Redirect::to(&target).into_response()
 }
 
 #[derive(Template)]
@@ -2854,6 +2890,9 @@ struct TaxFilingTpl {
     prev_step: u8,
     next_step: u8,
     view_title: String,
+    tagged_accounts: i64,
+    total_accounts: i64,
+    can_compute: bool,
     /// What the Next button does: "form" (fill profile), "agent" (send
     /// next_prompt to the AI), "approve" (review filled PDFs), "done".
     next_kind: &'static str,
@@ -2906,6 +2945,32 @@ async fn tax_filing(
     );
     let forms = crate::tax::list_forms(&state.pool, company_id).await.unwrap_or_default();
     let nav = build_nav(&state, &jar, user.id).await;
+    let (tagged_accounts, total_accounts) = queries::tagging_coverage(&state.pool, company_id).await;
+    let can_compute = crate::tax::bridge_entity_key(&nav.active_company_name).is_some();
+
+    // Flash from a Compute action (POST /app/tax/compute redirects back here).
+    let (compute_flash, compute_kind) = if let Some(cerr) = q.cerr.as_deref() {
+        (
+            Some(match cerr {
+                "no-mapping" => "No OpenTax mapping for this company yet.".to_string(),
+                _ => "Engine compute failed — review the ledger and tax-line tags.".to_string(),
+            }),
+            Some("error".to_string()),
+        )
+    } else if let Some(cform) = q.cform.as_deref() {
+        let ok = q.cok == Some(1);
+        (
+            Some(format!(
+                "OpenTax computed {} from the ledger: {:.2}{}",
+                cform,
+                q.cval.unwrap_or(0.0),
+                if ok { " — reconciles to the books ✓" } else { " — Δ does not reconcile, review" }
+            )),
+            Some(if ok { "success" } else { "error" }.to_string()),
+        )
+    } else {
+        (None, None)
+    };
 
     // Where are we in the pipeline? Steps the user can't do (books review,
     // pulling and filling forms, mailing) are delegated to the agent by the
@@ -3002,14 +3067,17 @@ async fn tax_filing(
 
     render(TaxFilingTpl {
         user_email: Some(user.email),
-        flash: None,
-        flash_kind: None,
+        flash: compute_flash,
+        flash_kind: compute_kind,
         nav,
         tax_steps,
         view_step,
         prev_step,
         next_step,
         view_title,
+        tagged_accounts,
+        total_accounts,
+        can_compute,
         next_kind,
         next_label,
         next_prompt,
