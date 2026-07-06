@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/logout", post(logout_submit))
         .route("/app/accounts", get(accounts_list).post(account_create))
         .route("/app/accounts/new", get(account_new))
+        .route("/app/accounts/{id}/tax-line", post(account_set_tax_line))
         .route("/app/vendors", get(vendors_list))
         .route(
             "/app/accounts/{id}/upload-statement",
@@ -165,6 +166,8 @@ struct AccountsListTpl {
     flash_kind: Option<String>,
     nav: NavCtx,
     accounts: Vec<queries::AccountRow>,
+    tax_line_options: Vec<queries::TaxLineOpt>,
+    form_code: String,
 }
 
 #[derive(Template)]
@@ -766,13 +769,58 @@ async fn accounts_list(State(state): State<AppState>, jar: CookieJar) -> Respons
     let accounts = queries::list_accounts(&state.pool, company_id)
         .await
         .unwrap_or_default();
+    let form_code = queries::company_form_code(&state.pool, company_id).await;
+    let tax_line_options = queries::tax_line_options(&form_code);
     render(AccountsListTpl {
         user_email: Some(user.email),
         flash: None,
         flash_kind: None,
         nav: build_nav(&state, &jar, user.id).await,
         accounts,
+        tax_line_options,
+        form_code,
     })
+}
+
+#[derive(serde::Deserialize)]
+struct TaxLineForm {
+    tax_line: String,
+}
+
+/// POST /app/accounts/{id}/tax-line — set an account's tax-line tag (HTMX).
+/// Returns a small fragment for the row's status cell.
+async fn account_set_tax_line(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Form(req): Form<TaxLineForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let account_id = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad account id").into_response(),
+    };
+    match queries::set_account_tax_line(&state.pool, company_id, account_id, &req.tax_line).await {
+        Ok(label) => {
+            // `label` is from the fixed tax_line_options vocabulary (no user HTML).
+            let cls = if label == "Unassigned" { "muted" } else { "tax-saved" };
+            Html(format!(
+                r#"<span class="{cls}" title="Saved — status: override">✓ {label}</span>"#
+            ))
+            .into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "set tax line failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "could not save").into_response()
+        }
+    }
 }
 
 #[derive(Template)]
@@ -2775,12 +2823,21 @@ async fn entry_unvoid(
 // Tax filing pipeline (profile → review → pull → fill → approve → mail)
 // ---------------------------------------------------------------------------
 
-/// One row of the tax-filing stepper. `state` is "done" | "current" | "todo".
+/// One row of the tax-filing stepper. `state` is "done" | "current" | "todo"
+/// (pipeline progress); `viewing` is whether the user is currently looking at it.
 struct TaxStepTpl {
     n: u8,
     title: &'static str,
     desc: &'static str,
     state: &'static str,
+    viewing: bool,
+}
+
+/// `?step=N` lets the user move back and forth through the pipeline to view or
+/// revisit any step, independent of where the pipeline actually is.
+#[derive(serde::Deserialize)]
+struct TaxStepQuery {
+    step: Option<u8>,
 }
 
 #[derive(Template)]
@@ -2791,6 +2848,12 @@ struct TaxFilingTpl {
     flash_kind: Option<String>,
     nav: NavCtx,
     tax_steps: Vec<TaxStepTpl>,
+    /// The step the user is currently viewing (1..=7), and its neighbours for
+    /// the Back / Next navigation.
+    view_step: u8,
+    prev_step: u8,
+    next_step: u8,
+    view_title: String,
     /// What the Next button does: "form" (fill profile), "agent" (send
     /// next_prompt to the AI), "approve" (review filled PDFs), "done".
     next_kind: &'static str,
@@ -2812,7 +2875,11 @@ struct TaxFilingTpl {
     has_signature: bool,
 }
 
-async fn tax_filing(State(state): State<AppState>, jar: CookieJar) -> Response {
+async fn tax_filing(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(q): axum::extract::Query<TaxStepQuery>,
+) -> Response {
     let user = match require_user(&state, &jar).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -2902,7 +2969,16 @@ async fn tax_filing(State(state): State<AppState>, jar: CookieJar) -> Response {
         ("Sign", "your signature (from Settings) is stamped onto every approved form"),
         ("Mail", "signed forms go out via Lob, certified, with delivery tracking"),
     ];
-    let tax_steps = step_defs
+    // The user can view/revisit any step via ?step=N; default to where the
+    // pipeline actually is. This is a VIEW cursor — it never changes form state.
+    let view_step = q.step.filter(|s| (1..=7).contains(s)).unwrap_or(current);
+    let prev_step = if view_step > 1 { view_step - 1 } else { 1 };
+    let next_step = if view_step < 7 { view_step + 1 } else { 7 };
+    let view_title = step_defs
+        .get((view_step - 1) as usize)
+        .map(|(t, _)| t.to_string())
+        .unwrap_or_default();
+    let tax_steps: Vec<TaxStepTpl> = step_defs
         .iter()
         .enumerate()
         .map(|(i, (title, desc))| {
@@ -2912,6 +2988,7 @@ async fn tax_filing(State(state): State<AppState>, jar: CookieJar) -> Response {
                 title,
                 desc,
                 state: if n < current { "done" } else if n == current { "current" } else { "todo" },
+                viewing: n == view_step,
             }
         })
         .collect();
@@ -2922,6 +2999,10 @@ async fn tax_filing(State(state): State<AppState>, jar: CookieJar) -> Response {
         flash_kind: None,
         nav,
         tax_steps,
+        view_step,
+        prev_step,
+        next_step,
+        view_title,
         next_kind,
         next_label,
         next_prompt,

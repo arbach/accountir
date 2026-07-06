@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Chart of accounts · Maven{% endblock %}
 {% block body %}
+<style>
+  .tax-saved { color: #217346; font-weight: 600; }
+  @media (prefers-color-scheme: dark) { .tax-saved { color: #3fb477; } }
+</style>
 <div class="page-header">
   <div>
     <h1>Chart of accounts</h1>
@@ -20,14 +24,37 @@
 {% else %}
 <div class="table-wrap">
 <table>
-  <thead><tr><th style="width:80px">Number</th><th>Name</th><th style="width:120px">Type</th><th style="width:80px">Currency</th><th style="width:170px"></th></tr></thead>
+  <thead><tr><th style="width:80px">Number</th><th>Name</th><th style="width:110px">Type</th><th style="width:300px">Tax line ({{ form_code }})</th><th style="width:150px"></th></tr></thead>
   <tbody>
   {% for a in accounts %}
     <tr>
       <td class="num" style="text-align: left;">{{ a.account_number }}</td>
       <td>{{ a.name }}</td>
       <td><span class="badge">{{ a.account_type }}</span></td>
-      <td class="muted">{{ a.currency.as_deref().unwrap_or("—") }}</td>
+      <td>
+        {% if a.account_type == "revenue" || a.account_type == "expense" %}
+        <div style="display:flex; align-items:center; gap:8px;">
+          <select name="tax_line"
+                  hx-post="/app/accounts/{{ a.id }}/tax-line"
+                  hx-trigger="change"
+                  hx-target="#tax-status-{{ a.id }}"
+                  hx-swap="innerHTML"
+                  style="max-width:230px; font-size:12px; padding:3px 6px;">
+            <option value="">— unassigned —</option>
+            {% for opt in tax_line_options %}
+            <option value="{{ opt.field }}"{% if a.tax_line_field.as_deref() == Some(opt.field.as_str()) %} selected{% endif %}>{{ opt.label }}</option>
+            {% endfor %}
+          </select>
+          <span id="tax-status-{{ a.id }}" style="font-size:11px;">
+            {% if a.tax_line_status.as_deref() == Some("override") %}<span class="tax-saved">✎ override</span>
+            {% else if a.tax_line_status.as_deref() == Some("confirmed") %}<span class="tax-saved">✓ confirmed</span>
+            {% else if a.tax_line_field.is_some() %}<span class="muted">auto</span>{% endif %}
+          </span>
+        </div>
+        {% else %}
+        <span class="muted" style="font-size:12px;">—</span>
+        {% endif %}
+      </td>
       <td>
         <form method="post" action="/app/accounts/{{ a.id }}/upload-statement" enctype="multipart/form-data" style="display:inline;">
           <input type="file" name="statement" accept=".pdf,.csv,.txt" style="display:none;" onchange="if (this.files.length) { this.form.querySelector('button').textContent = 'Parsing…'; this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit(); }">

@@ -51,6 +51,29 @@ Deno.test("f1120s: negative ordinary income (loss) flows to Schedule K line 1", 
   assertEquals(scheduleKLine1(result), -26_602.24);
 });
 
+Deno.test("f1120s: granular deduction lines (9,11,13,16,17,18) sum into total deductions and echo on the form", () => {
+  // Classifier lands expenses on specific named lines instead of dumping into line 19.
+  const result = f1120s.compute(ctx, {
+    line1a_gross_receipts: 90_000,
+    line9_repairs_maintenance: 1_000,
+    line11_rents: 10_740,
+    line12_taxes: 231,
+    line13_interest: 500,
+    line16_advertising: 20_119.15,
+    line17_pension_profit_sharing: 2_000,
+    line18_employee_benefits: 3_000,
+    line19_other_deductions: 5_000,
+  });
+  const l = lines(result);
+  // Named lines echo back onto the form (visible in pending), not collapsed into "other".
+  assertEquals(l.line11_rents, 10_740);
+  assertEquals(l.line16_advertising, 20_119.15);
+  assertEquals(l.line18_employee_benefits, 3_000);
+  // Total = 1,000 + 10,740 + 231 + 500 + 20,119.15 + 2,000 + 3,000 + 5,000 = 42,590.15
+  assertEquals(l.line20_total_deductions, 42_590.15);
+  assertEquals(l.line21_ordinary_business_income, 47_409.85);
+});
+
 Deno.test("f1120s: empty input yields zero ordinary income", () => {
   const result = f1120s.compute(ctx, {});
   const l = lines(result);

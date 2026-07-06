@@ -1,0 +1,472 @@
+{
+  "entity": "maven",
+  "form": "f1120",
+  "version": 1,
+  "source_year": 2025,
+  "accounts": {
+    "4200": {
+      "name": "Consulting Income (4200)",
+      "category": "service_revenue",
+      "node": "f1120",
+      "field": "line1a_gross_receipts",
+      "line": "1a Gross receipts",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "4350": {
+      "name": "IP Sales Revenue",
+      "category": "ip_sales_income",
+      "node": "f1120",
+      "field": "line1a_gross_receipts",
+      "line": "1a Gross receipts",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "4800": {
+      "name": "Interest Income",
+      "category": "interest_income",
+      "node": "f1120",
+      "field": "line5_interest",
+      "line": "5 Interest",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "5300": {
+      "name": "Subcontractors (5300)",
+      "category": "contractor",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other (contract labor)",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [
+        "contractor vs officer/employee comp \u2014 verify 1099 issued & no disguised owner pay"
+      ],
+      "notes": []
+    },
+    "6040": {
+      "name": "Bank Service Charges (6040)",
+      "category": "bank_fees",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'bank_fees' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6050": {
+      "name": "Merchant Account Fees (6050)",
+      "category": "bank_fees",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'bank_fees' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6120": {
+      "name": "Computer \u2013 Hosting (6120)",
+      "category": "software",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'software' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6130": {
+      "name": "Computer \u2013 Software (6130)",
+      "category": "software",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'software' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6140": {
+      "name": "Business Tax, License & Fees (6140)",
+      "category": "taxes_licenses",
+      "node": "f1120",
+      "field": "line17_taxes_licenses",
+      "line": "17 Taxes and licenses",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": []
+    },
+    "6155": {
+      "name": "Dues & Subscriptions (6155)",
+      "category": "dues",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'dues' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6160": {
+      "name": "Advertising & Marketing (6160)",
+      "category": "advertising",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'advertising' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6210": {
+      "name": "Meals & Entertainment (6210)",
+      "category": "meals",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other (meals, 50%)",
+      "sign": "abs",
+      "sep": false,
+      "factor": 0.5,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [
+        "meals \u2014 apply 50% limit (\u00a7274(n)); some categories are 100%/0%"
+      ],
+      "notes": [
+        "factor 0.5 applied (5,170.78 \u2192 2,585.39)"
+      ]
+    },
+    "6220": {
+      "name": "Office Supplies (6220)",
+      "category": "office",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'office' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6240": {
+      "name": "Office Expense (6240)",
+      "category": "office",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'office' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6250": {
+      "name": "Postage, Freight & Delivery (6250)",
+      "category": "office",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'office' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6310": {
+      "name": "Insurance \u2013 Vehicles (6310)",
+      "category": "insurance",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'insurance' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6320": {
+      "name": "Insurance - General Liability (6320)",
+      "category": "insurance",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'insurance' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6330": {
+      "name": "Professional Fees (6330)",
+      "category": "professional_fees",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'professional_fees' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6340": {
+      "name": "Accounting Fees (6340)",
+      "category": "professional_fees",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'professional_fees' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6450": {
+      "name": "Rent Expense (6450)",
+      "category": "rent",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'rent' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6470": {
+      "name": "Telephone and Internet Expense (6470)",
+      "category": "telecom",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'telecom' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6510": {
+      "name": "Travel Expense (6510)",
+      "category": "travel",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'travel' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6520": {
+      "name": "Vehicle Expense \u2013 Fuel (6520)",
+      "category": "auto",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'auto' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6530": {
+      "name": "Vehicle Expense - Repair & Maintenance (6530)",
+      "category": "repairs",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120 line for 'repairs' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    },
+    "6800": {
+      "name": "Charitable Donations (6800)",
+      "category": "charitable",
+      "node": "f1120",
+      "field": "line19_charitable",
+      "line": "19 Charitable contributions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "charitable \u2014 separately-stated on Sch K (S-corp) / limited on 1120 (C-corp)"
+      ],
+      "notes": []
+    },
+    "7150": {
+      "name": "Other Expense (7150)",
+      "category": "other_expense",
+      "node": "f1120",
+      "field": "line26_other_deductions",
+      "line": "26 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [
+        "uncategorized/misc \u2014 needs an account-level breakdown for the return"
+      ],
+      "notes": [
+        "no dedicated f1120 line for 'other_expense' \u2192 line line26_other_deductions (itemized statement)"
+      ]
+    }
+  }
+}

@@ -12,6 +12,185 @@ pub struct AccountRow {
     pub account_number: String,
     pub name: String,
     pub currency: Option<String>,
+    /// Current tax-line tag (from tax_account_lines), if any.
+    pub tax_line_field: Option<String>,
+    pub tax_line_label: Option<String>,
+    pub tax_line_status: Option<String>,
+}
+
+/// One selectable tax-form line for the Accounts-page tax-line dropdown.
+#[derive(Debug, Clone)]
+pub struct TaxLineOpt {
+    pub field: String,
+    pub label: String,
+    pub node: String,
+}
+
+/// The valid tax lines for a form, in form order. Mirrors the OpenTax engine
+/// input nodes (tax/opentax) and the CoA templates (tax/coa/templates).
+pub fn tax_line_options(form_code: &str) -> Vec<TaxLineOpt> {
+    let mk = |field: &str, label: &str, node: &str| TaxLineOpt {
+        field: field.to_string(),
+        label: label.to_string(),
+        node: node.to_string(),
+    };
+    match form_code {
+        "f1120" => vec![
+            mk("line1a_gross_receipts", "1a Gross receipts", "f1120"),
+            mk("line2_cogs", "2 Cost of goods sold", "f1120"),
+            mk("line4_dividends", "4 Dividends", "f1120"),
+            mk("line5_interest", "5 Interest income", "f1120"),
+            mk("line6_gross_rents", "6 Gross rents", "f1120"),
+            mk("line8_capital_gain", "8 Capital gain", "f1120"),
+            mk("line10_other_income", "10 Other income", "f1120"),
+            mk("line12_officer_compensation", "12 Officer compensation", "f1120"),
+            mk("line13_salaries_wages", "13 Salaries & wages", "f1120"),
+            mk("line17_taxes_licenses", "17 Taxes & licenses", "f1120"),
+            mk("line19_charitable", "19 Charitable contributions", "f1120"),
+            mk("line20_depreciation", "20 Depreciation", "f1120"),
+            mk("line26_other_deductions", "26 Other deductions", "f1120"),
+        ],
+        "f1040" => vec![
+            mk("line2b_interest", "Sch B — Interest income", "start"),
+            mk("line3b_dividends", "Sch B — Ordinary dividends", "start"),
+            mk("line7_capital_gain", "Sch D — Capital gain (8949)", "start"),
+            mk("line5_schedule_e", "Sch E — Passthrough/rental (K-1)", "start"),
+            mk("schedule1_other_income", "Sch 1 — Other income", "start"),
+            mk("schedule1_hsa", "Sch 1 — HSA adjustment", "start"),
+        ],
+        // default: f1120s (S-corp) — page 1 + separately-stated (Sch K) + rentals (8825)
+        _ => vec![
+            mk("line1a_gross_receipts", "1a Gross receipts", "f1120s"),
+            mk("line2_cogs", "2 Cost of goods sold", "f1120s"),
+            mk("line5_other_income", "5 Other income", "f1120s"),
+            mk("line7_officer_compensation", "7 Officer compensation", "f1120s"),
+            mk("line8_salaries_wages", "8 Salaries & wages", "f1120s"),
+            mk("line9_repairs_maintenance", "9 Repairs & maintenance", "f1120s"),
+            mk("line10_bad_debts", "10 Bad debts", "f1120s"),
+            mk("line11_rents", "11 Rents", "f1120s"),
+            mk("line12_taxes", "12 Taxes & licenses", "f1120s"),
+            mk("line13_interest", "13 Interest", "f1120s"),
+            mk("line14_depreciation", "14 Depreciation", "f1120s"),
+            mk("line16_advertising", "16 Advertising", "f1120s"),
+            mk("line17_pension_profit_sharing", "17 Pension/profit-sharing", "f1120s"),
+            mk("line18_employee_benefits", "18 Employee benefits", "f1120s"),
+            mk("line19_other_deductions", "19 Other deductions", "f1120s"),
+            mk("line4_interest_income", "Sch K-4 — Interest income", "schedule_k"),
+            mk("line5a_ordinary_dividends", "Sch K-5a — Dividends", "schedule_k"),
+            mk("line12a_charitable", "Sch K-12a — Charitable", "schedule_k"),
+            mk("gross_rents", "8825 — Gross rents", "f8825"),
+            mk("expense_repairs", "8825 — Repairs", "f8825"),
+            mk("expense_interest", "8825 — Mortgage interest", "f8825"),
+            mk("expense_taxes", "8825 — Property taxes", "f8825"),
+            mk("expense_insurance", "8825 — Insurance", "f8825"),
+            mk("expense_utilities", "8825 — Utilities", "f8825"),
+            mk("expense_depreciation", "8825 — Depreciation", "f8825"),
+            mk("expense_other", "8825 — Other", "f8825"),
+        ],
+    }
+}
+
+/// Federal form for a company, derived from its tax profile's entity_type.
+pub async fn company_form_code(pool: &PgPool, company_id: Uuid) -> String {
+    let mut conn = match pool.acquire().await {
+        Ok(c) => c,
+        Err(_) => return "f1120s".to_string(),
+    };
+    let mut tx = match conn.begin().await {
+        Ok(t) => t,
+        Err(_) => return "f1120s".to_string(),
+    };
+    let _ = set_tenant(&mut tx, company_id).await;
+    let et: Option<String> = sqlx::query_scalar(
+        "SELECT entity_type FROM tax_profiles WHERE company_id = $1",
+    )
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .ok()
+    .flatten();
+    let _ = tx.commit().await;
+    match et.as_deref() {
+        Some("c_corp") => "f1120",
+        Some("individual") => "f1040",
+        _ => "f1120s",
+    }
+    .to_string()
+}
+
+/// Set (or clear, when `field` is empty) the tax-line tag for one account.
+/// Upserts into tax_account_lines with status='override' (a human decision).
+pub async fn set_account_tax_line(
+    pool: &PgPool,
+    company_id: Uuid,
+    account_id: Uuid,
+    field: &str,
+) -> AppResult<String> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+
+    // Look up the account (number + name) under tenant isolation.
+    let acct = sqlx::query(
+        "SELECT account_number, name FROM accounts WHERE id = $1 AND company_id = $2",
+    )
+    .bind(account_id)
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let acct = match acct {
+        Some(r) => r,
+        None => {
+            tx.commit().await?;
+            return Ok("account not found".to_string());
+        }
+    };
+    let number: String = acct.get(0);
+    let name: String = acct.get(1);
+
+    if field.trim().is_empty() {
+        sqlx::query("DELETE FROM tax_account_lines WHERE company_id = $1 AND account_number = $2")
+            .bind(company_id)
+            .bind(&number)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Ok("Unassigned".to_string());
+    }
+
+    let form_code = company_form_code(pool, company_id).await;
+    let opt = tax_line_options(&form_code)
+        .into_iter()
+        .find(|o| o.field == field);
+    let (label, node) = match opt {
+        Some(o) => (o.label, o.node),
+        None => {
+            tx.commit().await?;
+            return Ok("invalid tax line".to_string());
+        }
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO tax_account_lines
+            (company_id, account_number, account_name, form_code, node, field, line_label, status, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'override', now())
+        ON CONFLICT (company_id, account_number) DO UPDATE SET
+            node = EXCLUDED.node, field = EXCLUDED.field, line_label = EXCLUDED.line_label,
+            status = 'override', flags = '[]'::jsonb, updated_at = now()
+        "#,
+    )
+    .bind(company_id)
+    .bind(&number)
+    .bind(&name)
+    .bind(&form_code)
+    .bind(&node)
+    .bind(field)
+    .bind(&label)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(label)
 }
 
 pub async fn list_accounts(pool: &PgPool, company_id: Uuid) -> AppResult<Vec<AccountRow>> {
@@ -20,10 +199,13 @@ pub async fn list_accounts(pool: &PgPool, company_id: Uuid) -> AppResult<Vec<Acc
     set_tenant(&mut tx, company_id).await?;
     let rows = sqlx::query(
         r#"
-        SELECT id, account_type::text, account_number, name, currency
-        FROM accounts
-        WHERE is_active = true
-        ORDER BY account_number ASC
+        SELECT a.id, a.account_type::text, a.account_number, a.name, a.currency,
+               t.field, t.line_label, t.status
+        FROM accounts a
+        LEFT JOIN tax_account_lines t
+               ON t.account_number = a.account_number AND t.company_id = a.company_id
+        WHERE a.is_active = true
+        ORDER BY a.account_number ASC
         "#,
     )
     .fetch_all(&mut *tx)
@@ -38,6 +220,9 @@ pub async fn list_accounts(pool: &PgPool, company_id: Uuid) -> AppResult<Vec<Acc
             account_number: r.get(2),
             name: r.get(3),
             currency: r.get(4),
+            tax_line_field: r.get(5),
+            tax_line_label: r.get(6),
+            tax_line_status: r.get(7),
         })
         .collect())
 }
@@ -1085,6 +1270,8 @@ pub struct EntryDetail {
     pub source_kind: Option<String>,
     /// Source statement file name, when the entry came from a parsed/uploaded statement.
     pub source_file: Option<String>,
+    /// company_files id for the source statement, so the UI can link to the stored PDF.
+    pub source_file_id: Option<Uuid>,
     /// Money flowed from here (the credited account / sending wallet).
     pub from: Option<Endpoint>,
     /// …to here (the debited account / receiving wallet).
@@ -1183,6 +1370,27 @@ pub async fn get_entry_detail(
     .map(|r| (r.get::<String, _>(0).into(), r.get::<Option<String>, _>(1)))
     .unwrap_or((None, None));
 
+    // Resolve the source statement to its stored file (for a download link), including the
+    // `upload:<name>` reference fallback used by some imports.
+    let source_file = source_file.or_else(|| {
+        reference
+            .as_deref()
+            .and_then(|r| r.strip_prefix("upload:"))
+            .map(|s| s.to_string())
+    });
+    let source_file_id: Option<Uuid> = if let Some(ref f) = source_file {
+        sqlx::query(
+            "SELECT id FROM company_files WHERE company_id = $1 AND filename = $2 ORDER BY uploaded_at DESC LIMIT 1",
+        )
+        .bind(company_id)
+        .bind(f)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(|r| r.get::<Uuid, _>(0))
+    } else {
+        None
+    };
+
     // Vendor: prefer the crypto counterparty; otherwise the first 0x address in the memo.
     let vendor_addr = crypto
         .as_ref()
@@ -1248,14 +1456,6 @@ pub async fn get_entry_detail(
 
     tx.commit().await?;
 
-    // Fall back to the upload: reference if entry_sources has no file.
-    let source_file = source_file.or_else(|| {
-        reference
-            .as_deref()
-            .and_then(|r| r.strip_prefix("upload:"))
-            .map(|s| s.to_string())
-    });
-
     // From → To: money flows from the credited line (most negative) to the debited
     // line (most positive). For crypto entries, attach the full sending/receiving
     // wallet + an explorer address link.
@@ -1298,6 +1498,7 @@ pub async fn get_entry_detail(
         vendor,
         source_kind,
         source_file,
+        source_file_id,
         from,
         to,
         documents,

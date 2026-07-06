@@ -1,0 +1,40 @@
+{
+  "entity_type": "c_corp",
+  "form": "f1120",
+  "description": "Tax-aligned chart of accounts for a C-corporation (Form 1120). Numbering: 4xxx income, 5xxx COGS, 6xxx deductions in tax-line order, 9xxx non-deductible / M-1. NOTE: the current engine has dedicated 1120 lines only for officer comp (12), salaries (13), taxes (17), charitable (19) and depreciation (20); repairs, rents-paid, interest, and advertising land on line 26 (Other deductions, itemized) — still a named account here so the itemized statement is clean.",
+  "accounts": [
+    { "number": "4000", "name": "Gross Receipts or Sales", "type": "revenue", "tax_line": "line1a_gross_receipts", "line": "1a", "category": "service_revenue" },
+    { "number": "4010", "name": "Returns & Allowances", "type": "revenue", "tax_line": "line1b_returns_allowances", "line": "1b", "category": "returns" },
+    { "number": "4400", "name": "Dividend Income", "type": "revenue", "tax_line": "line4_dividends", "line": "4", "category": "dividend_income" },
+    { "number": "4500", "name": "Interest Income", "type": "revenue", "tax_line": "line5_interest", "line": "5", "category": "interest_income" },
+    { "number": "4600", "name": "Gross Rents", "type": "revenue", "tax_line": "line6_gross_rents", "line": "6", "category": "rental_income" },
+    { "number": "4800", "name": "Capital Gain Net Income", "type": "revenue", "tax_line": "line8_capital_gain", "line": "8", "category": "capital_gain_income" },
+    { "number": "4900", "name": "Other Income", "type": "revenue", "tax_line": "line10_other_income", "line": "10", "category": "other_income" },
+
+    { "number": "5000", "name": "Cost of Goods Sold", "type": "expense", "tax_line": "line2_cogs", "line": "2", "category": "cogs" },
+
+    { "number": "6120", "name": "Officer Compensation", "type": "expense", "tax_line": "line12_officer_compensation", "line": "12", "category": "officer_comp" },
+    { "number": "6130", "name": "Salaries & Wages (non-officer)", "type": "expense", "tax_line": "line13_salaries_wages", "line": "13", "category": "wages" },
+    { "number": "6170", "name": "Taxes & Licenses", "type": "expense", "tax_line": "line17_taxes_licenses", "line": "17", "category": "taxes_licenses" },
+    { "number": "6190", "name": "Charitable Contributions", "type": "expense", "tax_line": "line19_charitable", "line": "19", "category": "charitable", "note": "C-corp charitable limited to 10% of taxable income." },
+    { "number": "6200", "name": "Depreciation (Form 4562)", "type": "expense", "tax_line": "line20_depreciation", "line": "20", "category": "depreciation" },
+
+    { "number": "6300", "name": "Contract Labor / Subcontractors (1099)", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "contractor", "note": "Break large subcontractor spend into verifiable sub-accounts; a single large line invites scrutiny." },
+    { "number": "6310", "name": "Repairs & Maintenance", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "repairs" },
+    { "number": "6320", "name": "Rents", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "rent" },
+    { "number": "6330", "name": "Interest Expense", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "interest_expense" },
+    { "number": "6340", "name": "Advertising & Marketing", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "advertising" },
+    { "number": "6350", "name": "Professional Fees (Legal/Accounting)", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "professional_fees" },
+    { "number": "6360", "name": "Insurance", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "insurance" },
+    { "number": "6370", "name": "Office, Supplies & Postage", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "office" },
+    { "number": "6380", "name": "Computer, Hosting & Software", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "software" },
+    { "number": "6390", "name": "Telephone & Internet", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "telecom" },
+    { "number": "6400", "name": "Travel", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "travel" },
+    { "number": "6410", "name": "Automobile & Vehicle", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "auto" },
+    { "number": "6420", "name": "Bank & Merchant Fees", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "bank_fees" },
+    { "number": "6430", "name": "Dues & Subscriptions", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "dues" },
+    { "number": "6900", "name": "Meals (50%)", "type": "expense", "tax_line": "line26_other_deductions", "line": "26", "category": "meals", "factor": 0.5 },
+
+    { "number": "9900", "name": "Non-Deductible / M-1 Only", "type": "expense", "tax_line": null, "line": "M-1", "excluded": true, "category": "other_expense", "note": "Federal income tax, penalties, 50% meals disallowance, FX revaluations, personal." }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "entity_type": "individual",
+  "form": "f1040",
+  "description": "Tax-aligned chart of accounts for an individual (Form 1040) whose books aggregate passthrough and investment activity. Unlike an operating entity, a 1040 'CoA' is organized by SCHEDULE: each account maps to the schedule/line where it lands. Passthrough K-1 items keep their character (ordinary vs rental vs portfolio). Numbering: 4xxx income by schedule, 5xxx passthrough losses, 9xxx non-reportable.",
+  "accounts": [
+    { "number": "4100", "name": "Schedule E — S-corp/Partnership Income (K-1)", "type": "revenue", "tax_line": "line5_schedule_e", "line": "Sch E", "category": "k1_passthrough", "note": "One account per K-1 entity; keeps ordinary vs rental character." },
+    { "number": "4300", "name": "Schedule E — Rental / LP Income (K-1)", "type": "revenue", "tax_line": "line5_schedule_e", "line": "Sch E", "category": "k1_rental" },
+    { "number": "4600", "name": "Schedule B — Interest Income", "type": "revenue", "tax_line": "line2b_interest", "line": "Sch B", "category": "interest_income" },
+    { "number": "4700", "name": "Schedule B — Ordinary Dividends", "type": "revenue", "tax_line": "line3b_dividends", "line": "Sch B", "category": "dividend_income" },
+    { "number": "4750", "name": "Schedule B — Qualified Dividends", "type": "revenue", "tax_line": "line3a_qualified_dividends", "line": "Sch B", "category": "qualified_dividend" },
+    { "number": "4800", "name": "Schedule 1 — Other Income", "type": "revenue", "tax_line": "schedule1_other_income", "line": "Sch 1", "category": "other_income" },
+    { "number": "4900", "name": "Schedule D — Long-Term Capital Gain (8949)", "type": "revenue", "tax_line": "line7_capital_gain", "line": "Sch D", "category": "capital_gain_income", "note": "e.g. stock sale — via Form 8949 Box; keep short- vs long-term separate." },
+    { "number": "4950", "name": "Schedule D — Short-Term Capital Gain (8949)", "type": "revenue", "tax_line": "line7_capital_gain", "line": "Sch D", "category": "capital_gain_income" },
+
+    { "number": "5100", "name": "Schedule E — S-corp/Partnership Loss (K-1)", "type": "expense", "tax_line": "line5_schedule_e", "line": "Sch E", "sign": "signed", "category": "k1_passthrough", "note": "Passthrough loss — stays SIGNED (negative) into Schedule E; do not take magnitude." },
+    { "number": "5200", "name": "Schedule E — Rental / LP Loss (K-1)", "type": "expense", "tax_line": "line5_schedule_e", "line": "Sch E", "sign": "signed", "category": "k1_rental" },
+    { "number": "5500", "name": "HSA Contribution (Schedule 1 adjustment)", "type": "expense", "tax_line": "schedule1_hsa", "line": "Sch 1", "category": "hsa" },
+
+    { "number": "9900", "name": "Non-Reportable / Personal", "type": "expense", "tax_line": null, "line": "—", "excluded": true, "category": "other_expense", "note": "Personal draws, transfers, non-taxable items — never on the return." }
+  ]
+}

@@ -60,7 +60,7 @@
   <h3 style="margin-top:0;">Source</h3>
   <div class="form-row" style="grid-template-columns: 120px 1fr;">
     <div class="muted">Origin</div><div><span class="badge">{{ k }}</span></div>
-    {% match entry.source_file %}{% when Some with (f) %}<div class="muted">Statement file</div><div><strong>{{ f }}</strong></div>{% when None %}{% endmatch %}
+    {% match entry.source_file %}{% when Some with (f) %}<div class="muted">Statement file</div><div>{% match entry.source_file_id %}{% when Some with (id) %}<a href="/app/documents/{{ id }}/download" target="_blank" rel="noopener">{{ f }} →</a>{% when None %}<strong>{{ f }}</strong>{% endmatch %}</div>{% when None %}{% endmatch %}
   </div>
 </div>
 {% when None %}

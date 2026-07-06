@@ -22,18 +22,27 @@
   </div>
   <ol style="margin: 8px 0 4px 0; padding: 0; list-style: none; font-size: 14px; line-height: 1.7;">
     {% for s in tax_steps %}
-    <li style="display:flex; gap:10px; align-items:baseline; {% if s.state == "todo" %}opacity:.55;{% endif %}">
-      <span style="flex:0 0 22px; height:22px; border-radius:50%; text-align:center; font-size:12px; line-height:22px; font-weight:600;
-        {% if s.state == "done" %}background:#16a34a; color:#fff;{% else if s.state == "current" %}background:var(--accent, #2563eb); color:#fff;{% else %}background:var(--border, #ddd);{% endif %}">
-        {% if s.state == "done" %}✓{% else %}{{ s.n }}{% endif %}</span>
-      <div><strong>{{ s.title }}</strong>{% if s.state == "current" %} <span class="badge">you are here</span>{% endif %}
-        <span class="muted">— {{ s.desc }}</span></div>
+    <li style="{% if s.state == "todo" && !s.viewing %}opacity:.55;{% endif %}">
+      <a href="/app/tax?step={{ s.n }}" style="display:flex; gap:10px; align-items:baseline; text-decoration:none; color:inherit; padding:4px 8px; border-radius:8px;
+        {% if s.viewing %}background:var(--surface-2, #eef2ff); box-shadow: inset 3px 0 0 var(--accent, #2563eb);{% endif %}">
+        <span style="flex:0 0 22px; height:22px; border-radius:50%; text-align:center; font-size:12px; line-height:22px; font-weight:600;
+          {% if s.state == "done" %}background:#16a34a; color:#fff;{% else if s.state == "current" %}background:var(--accent, #2563eb); color:#fff;{% else %}background:var(--border, #ddd);{% endif %}">
+          {% if s.state == "done" %}✓{% else %}{{ s.n }}{% endif %}</span>
+        <div><strong>{{ s.title }}</strong>{% if s.state == "current" %} <span class="badge">you are here</span>{% endif %}{% if s.viewing && s.state != "current" %} <span class="badge" style="background:var(--accent, #2563eb); color:#fff;">viewing</span>{% endif %}
+          <span class="muted">— {{ s.desc }}</span></div>
+      </a>
     </li>
     {% endfor %}
   </ol>
-  <div class="muted" style="font-size: 12px; margin-top: 6px;">The Next button runs the current step: AI steps are handed to the assistant automatically; profile and approval need you.</div>
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:10px; border-top:1px solid var(--border, #eee); padding-top:10px;">
+    <a href="/app/tax?step={{ prev_step }}" class="btn btn-ghost" style="font-size:12px; padding:4px 12px; {% if view_step == 1 %}visibility:hidden;{% endif %}">← Back</a>
+    <span class="muted" style="font-size:12px;">Step {{ view_step }} of 7 · {{ view_title }}</span>
+    <a href="/app/tax?step={{ next_step }}" class="btn btn-ghost" style="font-size:12px; padding:4px 12px; {% if view_step == 7 %}visibility:hidden;{% endif %}">Next step →</a>
+  </div>
+  <div class="muted" style="font-size: 12px; margin-top: 6px;">Click any step to jump to it, or use Back / Next step. The blue button above runs whatever step the pipeline is actually on.</div>
 </div>
 
+{% if view_step == 1 %}
 <div class="card" id="tax-profile-card" style="margin-bottom: var(--gap);">
   <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
     <span>Step 1 · Tax profile</span>
@@ -68,7 +77,21 @@
     </div>
   </form>
 </div>
+{% endif %}
 
+{% if view_step == 2 %}
+<div class="card" style="margin-bottom: var(--gap);">
+  <div class="card-title">Step 2 · Books review &amp; tax-line mapping</div>
+  <p class="muted" style="font-size:13px; margin-top:4px;">Before any numbers are used, the books are reviewed (transfers, duplicates, credit cards) and every ledger account is mapped to the tax-form line it belongs on. Edit any account's tax line on the Accounts page.</p>
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
+    <a href="/app/accounts" class="btn btn-secondary" style="font-size:12px; padding:4px 12px;">Review account → tax-line mapping →</a>
+    <a href="/app/reports/income" class="btn btn-ghost" style="font-size:12px; padding:4px 12px;">Income statement →</a>
+    <a href="/app/entries" class="btn btn-ghost" style="font-size:12px; padding:4px 12px;">Ledger →</a>
+  </div>
+</div>
+{% endif %}
+
+{% if view_step >= 3 %}
 <div class="card" id="tax-forms-card">
   <div class="card-title" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
     <span>Forms in the pipeline</span>
@@ -119,6 +142,7 @@
   </div>
   {% endif %}
 </div>
+{% endif %}
 
 <script>
 (function () {

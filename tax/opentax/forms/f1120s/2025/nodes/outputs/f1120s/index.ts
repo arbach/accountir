@@ -23,11 +23,21 @@ import { schedule_k } from "../../intermediate/schedule_k/index.ts";
 // Deductions:
 //   Line 7  — Compensation of officers (Form 1125-E)
 //   Line 8  — Salaries and wages
+//   Line 9  — Repairs and maintenance
+//   Line 10 — Bad debts
+//   Line 11 — Rents
 //   Line 12 — Taxes and licenses
+//   Line 13 — Interest (see §163(j) instructions)
 //   Line 14 — Depreciation (Form 4562)
-//   Line 19 — Other deductions
+//   Line 16 — Advertising
+//   Line 17 — Pension, profit-sharing, etc. plans
+//   Line 18 — Employee benefit programs
+//   Line 19 — Other deductions (itemized statement attached)
 //   Line 20 — Total deductions
 //   Line 21 — Ordinary business income (loss) (6 − 20)
+//
+// Lines 15 (depletion) is out of scope. Every deductible expense that does not
+// fit a named line above belongs on line 19 with an attached itemized statement.
 //
 // Entity-level federal income tax (line 22) is generally $0 for an S corporation;
 // income passes through to shareholders. Built-in gains tax (§1374) and the
@@ -45,8 +55,15 @@ const inputObject = z.object({
   // Deductions
   line7_officer_compensation: z.number().nonnegative().optional(),
   line8_salaries_wages: z.number().nonnegative().optional(),
+  line9_repairs_maintenance: z.number().nonnegative().optional(),
+  line10_bad_debts: z.number().nonnegative().optional(),
+  line11_rents: z.number().nonnegative().optional(),
   line12_taxes: z.number().nonnegative().optional(),
+  line13_interest: z.number().nonnegative().optional(),
   line14_depreciation: z.number().nonnegative().optional(),
+  line16_advertising: z.number().nonnegative().optional(),
+  line17_pension_profit_sharing: z.number().nonnegative().optional(),
+  line18_employee_benefits: z.number().nonnegative().optional(),
   line19_other_deductions: z.number().nonnegative().optional(),
 });
 
@@ -79,8 +96,15 @@ function totalDeductions(input: F1120sInput): number {
   return (
     (input.line7_officer_compensation ?? 0) +
     (input.line8_salaries_wages ?? 0) +
+    (input.line9_repairs_maintenance ?? 0) +
+    (input.line10_bad_debts ?? 0) +
+    (input.line11_rents ?? 0) +
     (input.line12_taxes ?? 0) +
+    (input.line13_interest ?? 0) +
     (input.line14_depreciation ?? 0) +
+    (input.line16_advertising ?? 0) +
+    (input.line17_pension_profit_sharing ?? 0) +
+    (input.line18_employee_benefits ?? 0) +
     (input.line19_other_deductions ?? 0)
   );
 }
@@ -90,7 +114,14 @@ function assemblePageOne(input: F1120sInput): Record<string, number> {
   const line3 = grossProfit(input);
   const line6 = totalIncome(input);
   const line20 = totalDeductions(input);
+  // Echo every populated income/deduction line so it renders on the form and is
+  // visible in `pending` (the classifier lands amounts on specific named lines).
+  const populated: Record<string, number> = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (typeof v === "number" && v !== 0) populated[k] = r2(v);
+  }
   return {
+    ...populated,
     line1c_net_receipts: r2(line1c),
     line3_gross_profit: r2(line3),
     line6_total_income: r2(line6),

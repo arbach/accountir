@@ -1,0 +1,44 @@
+{
+  "entity_type": "s_corp",
+  "form": "f1120s",
+  "description": "Tax-aligned chart of accounts for an S-corporation with an operating trade or business (Form 1120-S). Every account is pinned 1:1 to a tax line so the return needs no guesswork. Numbering runs in tax-line order: 4xxx income, 5xxx COGS, 6xxx ordinary deductions (Page 1), 8xxx separately-stated (Schedule K), 9xxx non-deductible / M-1.",
+  "accounts": [
+    { "number": "4000", "name": "Gross Receipts or Sales", "type": "revenue", "tax_line": "line1a_gross_receipts", "line": "1a", "category": "service_revenue" },
+    { "number": "4010", "name": "Returns & Allowances", "type": "revenue", "tax_line": "line1b_returns_allowances", "line": "1b", "category": "returns" },
+    { "number": "4700", "name": "Other Income (Page 1)", "type": "revenue", "tax_line": "line5_other_income", "line": "5", "category": "other_income" },
+
+    { "number": "5000", "name": "Cost of Goods Sold", "type": "expense", "tax_line": "line2_cogs", "line": "2", "category": "cogs" },
+
+    { "number": "6070", "name": "Officer Compensation", "type": "expense", "tax_line": "line7_officer_compensation", "line": "7", "category": "officer_comp", "note": "Owner W-2 pay — S-corp reasonable-comp. Keep SEPARATE from contract labor." },
+    { "number": "6080", "name": "Salaries & Wages (non-officer)", "type": "expense", "tax_line": "line8_salaries_wages", "line": "8", "category": "wages" },
+    { "number": "6090", "name": "Repairs & Maintenance", "type": "expense", "tax_line": "line9_repairs_maintenance", "line": "9", "category": "repairs" },
+    { "number": "6100", "name": "Bad Debts", "type": "expense", "tax_line": "line10_bad_debts", "line": "10", "category": "bad_debt" },
+    { "number": "6110", "name": "Rents", "type": "expense", "tax_line": "line11_rents", "line": "11", "category": "rent" },
+    { "number": "6120", "name": "Taxes & Licenses", "type": "expense", "tax_line": "line12_taxes", "line": "12", "category": "taxes_licenses" },
+    { "number": "6130", "name": "Interest Expense", "type": "expense", "tax_line": "line13_interest", "line": "13", "category": "interest_expense" },
+    { "number": "6140", "name": "Depreciation (Form 4562)", "type": "expense", "tax_line": "line14_depreciation", "line": "14", "category": "depreciation" },
+    { "number": "6160", "name": "Advertising", "type": "expense", "tax_line": "line16_advertising", "line": "16", "category": "advertising" },
+    { "number": "6170", "name": "Pension, Profit-Sharing Plans", "type": "expense", "tax_line": "line17_pension_profit_sharing", "line": "17", "category": "pension" },
+    { "number": "6180", "name": "Employee Benefit Programs", "type": "expense", "tax_line": "line18_employee_benefits", "line": "18", "category": "benefits" },
+
+    { "number": "6300", "name": "Contract Labor (1099)", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "contractor", "note": "Real outside contractors with 1099s — NOT owner pay (that is 6070)." },
+    { "number": "6310", "name": "Professional Fees (Legal/Accounting)", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "professional_fees" },
+    { "number": "6320", "name": "Insurance", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "insurance" },
+    { "number": "6330", "name": "Office Expense & Supplies", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "office" },
+    { "number": "6340", "name": "Telephone & Internet", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "telecom" },
+    { "number": "6350", "name": "Utilities", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "utilities" },
+    { "number": "6360", "name": "Computer & Software", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "software" },
+    { "number": "6370", "name": "Dues & Subscriptions", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "dues" },
+    { "number": "6380", "name": "Travel", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "travel" },
+    { "number": "6390", "name": "Bank & Merchant Fees", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "bank_fees" },
+    { "number": "6400", "name": "Automobile & Vehicle", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "auto" },
+    { "number": "6410", "name": "Outside Services / Platform Fees", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "outside_services", "note": "Confirm these are real expenses, not fees netted out of revenue (contra-revenue)." },
+    { "number": "6900", "name": "Meals (50%)", "type": "expense", "tax_line": "line19_other_deductions", "line": "19", "category": "meals", "factor": 0.5, "note": "50% deductible §274(n); the disallowed half is an M-1 add-back." },
+
+    { "number": "8100", "name": "Interest Income (Schedule K)", "type": "revenue", "tax_line": "line4_interest_income", "line": "K-4", "sep": true, "category": "interest_income" },
+    { "number": "8110", "name": "Dividend Income (Schedule K)", "type": "revenue", "tax_line": "line5a_ordinary_dividends", "line": "K-5a", "sep": true, "category": "dividend_income" },
+    { "number": "8200", "name": "Charitable Contributions (Schedule K)", "type": "expense", "tax_line": "line12a_charitable", "line": "K-12a", "sep": true, "category": "charitable" },
+
+    { "number": "9900", "name": "Non-Deductible / M-1 Only", "type": "expense", "tax_line": null, "line": "M-1", "excluded": true, "category": "other_expense", "note": "Penalties, personal, 50% meals disallowance, etc. — never reduce ordinary income." }
+  ]
+}

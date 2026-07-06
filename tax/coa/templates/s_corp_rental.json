@@ -1,0 +1,24 @@
+{
+  "entity_type": "s_corp_rental",
+  "form": "f1120s",
+  "description": "Tax-aligned chart of accounts for an S-corporation whose only activity is rental real estate (Form 1120-S with Form 8825). Rental income and expenses are SEPARATELY STATED on Form 8825 → Schedule K line 2 (net rental real estate), NOT ordinary business income (line 21). One income account and one expense account PER PROPERTY is ideal; the tax_line maps to the 8825 expense column. Mortgage payments MUST be split: interest is deductible (8825 line 9), principal is a balance-sheet loan paydown and is NOT a P&L expense at all.",
+  "accounts": [
+    { "number": "4000", "name": "Rental Income — Property A", "type": "revenue", "tax_line": "gross_rents", "line": "8825-2", "sep": true, "category": "rental_income", "note": "One rental-income account per property (property tag = the 8825 column)." },
+
+    { "number": "6200", "name": "Advertising — Rental", "type": "expense", "tax_line": "expense_advertising", "line": "8825-3", "sep": true, "category": "advertising" },
+    { "number": "6210", "name": "Auto & Travel — Rental", "type": "expense", "tax_line": "expense_auto_travel", "line": "8825-4", "sep": true, "category": "travel" },
+    { "number": "6220", "name": "Cleaning & Maintenance", "type": "expense", "tax_line": "expense_cleaning_maintenance", "line": "8825-5", "sep": true, "category": "cleaning" },
+    { "number": "6230", "name": "Commissions", "type": "expense", "tax_line": "expense_commissions", "line": "8825-6", "sep": true, "category": "commissions" },
+    { "number": "6240", "name": "Insurance — Rental", "type": "expense", "tax_line": "expense_insurance", "line": "8825-7", "sep": true, "category": "insurance" },
+    { "number": "6250", "name": "Legal & Professional — Rental", "type": "expense", "tax_line": "expense_legal_professional", "line": "8825-8", "sep": true, "category": "professional_fees" },
+    { "number": "6260", "name": "Mortgage Interest — Rental", "type": "expense", "tax_line": "expense_interest", "line": "8825-9", "sep": true, "category": "interest_expense", "note": "INTEREST ONLY. Principal is not deductible — book it to the loan liability, never here." },
+    { "number": "6270", "name": "Repairs — Rental", "type": "expense", "tax_line": "expense_repairs", "line": "8825-12", "sep": true, "category": "repairs" },
+    { "number": "6280", "name": "Property Taxes", "type": "expense", "tax_line": "expense_taxes", "line": "8825-11", "sep": true, "category": "taxes_licenses" },
+    { "number": "6290", "name": "Utilities — Rental", "type": "expense", "tax_line": "expense_utilities", "line": "8825-13", "sep": true, "category": "utilities" },
+    { "number": "6300", "name": "Wages & Salaries — Rental", "type": "expense", "tax_line": "expense_wages_salaries", "line": "8825-14", "sep": true, "category": "wages" },
+    { "number": "6310", "name": "Depreciation — Rental (Form 4562)", "type": "expense", "tax_line": "expense_depreciation", "line": "8825-14", "sep": true, "category": "depreciation" },
+    { "number": "6390", "name": "Other Rental Expenses", "type": "expense", "tax_line": "expense_other", "line": "8825-15", "sep": true, "category": "other_expense" },
+
+    { "number": "9900", "name": "Mortgage Principal (Loan Paydown — NOT an expense)", "type": "expense", "tax_line": null, "line": "B/S", "excluded": true, "category": "mortgage_pi", "note": "Placeholder only. Principal reduces the loan liability on the balance sheet; it must NOT sit in the P&L. If P&I are booked together, split them." }
+  ]
+}
