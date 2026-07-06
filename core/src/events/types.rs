@@ -162,6 +162,13 @@ pub enum Event {
         old_account_id: String,
         new_account_id: String,
     },
+    /// Correct an entry's human-readable memo (e.g. after reclassification). The
+    /// original source text is preserved separately in entry_sources.source_detail.
+    JournalEntryMemoUpdated {
+        entry_id: String,
+        old_memo: String,
+        new_memo: String,
+    },
 
     // Fiscal Periods
     FiscalYearOpened {
@@ -273,6 +280,7 @@ impl Event {
             Event::JournalEntryUnvoided { .. } => "journal_entry_unvoided",
             Event::JournalEntryAnnotated { .. } => "journal_entry_annotated",
             Event::JournalLineReassigned { .. } => "journal_line_reassigned",
+            Event::JournalEntryMemoUpdated { .. } => "journal_entry_memo_updated",
             Event::FiscalYearOpened { .. } => "fiscal_year_opened",
             Event::PeriodClosed { .. } => "period_closed",
             Event::PeriodReopened { .. } => "period_reopened",
@@ -309,6 +317,7 @@ impl Event {
             Event::JournalEntryUnvoided { entry_id, .. } => Some(entry_id),
             Event::JournalEntryAnnotated { entry_id, .. } => Some(entry_id),
             Event::JournalLineReassigned { entry_id, .. } => Some(entry_id),
+            Event::JournalEntryMemoUpdated { entry_id, .. } => Some(entry_id),
             Event::FiscalYearOpened { .. } => None,
             Event::PeriodClosed { .. } => None,
             Event::PeriodReopened { .. } => None,

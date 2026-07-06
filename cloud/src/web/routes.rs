@@ -17,7 +17,7 @@ use crate::auth::AuthenticatedUser;
 use crate::commands::{
     account::{create_account, rename_account, CreateAccountInput},
     entry::{post_entry, EntryLineInput, PostEntryInput},
-    mutations::{reassign_line, unvoid_entry, void_entry},
+    mutations::{reassign_line, unvoid_entry, update_entry_memo, void_entry},
 };
 use crate::error::AppError;
 use crate::http::AppState;
@@ -106,6 +106,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/entries/{entry_id}/void", post(entry_void))
         .route("/app/entries/{entry_id}/unvoid", post(entry_unvoid))
         .route("/app/entries/{entry_id}", get(entry_detail_view))
+        .route("/app/entries/{entry_id}/memo", post(entry_memo_update))
         .route("/app/reports", get(reports_index))
         .route("/app/reports/trial-balance", get(trial_balance))
         .route("/app/reports/income-statement", get(report_income))
@@ -792,6 +793,47 @@ struct TaxLineForm {
 #[derive(serde::Deserialize)]
 struct RenameForm {
     name: String,
+}
+
+#[derive(serde::Deserialize)]
+struct MemoForm {
+    memo: String,
+    redirect: Option<String>,
+}
+
+/// POST /app/entries/{entry_id}/memo — correct an entry's memo (event-sourced).
+async fn entry_memo_update(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Form(req): Form<MemoForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let entry_id = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad entry id").into_response(),
+    };
+    match update_entry_memo(&state.pool, company_id, user.id, entry_id, &req.memo).await {
+        Ok(_) => {
+            let dest = req
+                .redirect
+                .filter(|r| r.starts_with("/app/"))
+                .unwrap_or_else(|| format!("/app/entries/{id}"));
+            Redirect::to(&dest).into_response()
+        }
+        Err(AppError::BadRequest(m)) => (StatusCode::BAD_REQUEST, m).into_response(),
+        Err(e) => {
+            tracing::error!(error = ?e, "memo update failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "could not update memo").into_response()
+        }
+    }
 }
 
 /// POST /app/accounts/{id}/rename — rename an account (pencil edit).

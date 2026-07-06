@@ -3,7 +3,15 @@
 {% block body %}
 <div class="page-header">
   <div>
-    <h1>{{ entry.memo_display }}</h1>
+    <h1 style="display:inline-flex; align-items:center; gap:8px;">
+      <span class="memo-text">{{ entry.memo_display }}</span>
+      <button type="button" class="pencil" title="Edit memo" style="opacity:.6;" onclick="var h=this.closest('h1'); h.querySelector('.memo-form').style.display='inline-flex'; h.querySelector('.memo-text').style.display='none'; this.style.display='none'; h.querySelector('.memo-form input').focus();">✎</button>
+      <form method="post" action="/app/entries/{{ entry.id }}/memo" class="memo-form" style="display:none; gap:6px; align-items:center;">
+        <input type="hidden" name="redirect" value="/app/entries/{{ entry.id }}">
+        <input type="text" name="memo" value="{{ entry.memo }}" style="font-size:14px; padding:4px 8px; min-width:280px;">
+        <button type="submit" class="btn btn-primary" style="font-size:12px; padding:3px 10px;">Save</button>
+      </form>
+    </h1>
     <div class="subtitle">
       {{ entry.date }} · <strong>{{ entry.total_debits() }}</strong> · <span class="badge">{{ entry.source_label() }}</span>
       {% if entry.is_void %} <span class="badge">VOID</span>{% endif %}

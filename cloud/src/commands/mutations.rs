@@ -1,6 +1,7 @@
 //! Mutations to existing entries: void, unvoid, line reassign.
 
 use accountir_core::events::types::Event;
+use accountir_core::events::validation::validate_event;
 use sqlx::{Acquire, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -51,6 +52,43 @@ pub async fn unvoid_entry(
     let mut conn = pool.acquire().await?;
     let mut tx = conn.begin().await?;
     set_tenant(&mut tx, company_id).await?;
+    append_event(&mut tx, company_id, user_id, &event).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Correct an entry's memo (e.g. relabel a reclassified transaction). Emits
+/// JournalEntryMemoUpdated; the original source text stays in entry_sources.
+pub async fn update_entry_memo(
+    pool: &PgPool,
+    company_id: Uuid,
+    user_id: Uuid,
+    entry_id: Uuid,
+    new_memo: &str,
+) -> AppResult<()> {
+    let new_memo = new_memo.trim();
+    if new_memo.is_empty() {
+        return Err(AppError::BadRequest("memo cannot be empty".into()));
+    }
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let old: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT memo FROM journal_entries WHERE id = $1")
+            .bind(entry_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let old_memo = old.ok_or(AppError::NotFound)?.0.unwrap_or_default();
+    if old_memo == new_memo {
+        tx.commit().await?;
+        return Ok(());
+    }
+    let event = Event::JournalEntryMemoUpdated {
+        entry_id: entry_id.to_string(),
+        old_memo,
+        new_memo: new_memo.to_string(),
+    };
+    validate_event(&event).map_err(|e| AppError::BadRequest(format!("invalid memo: {e}")))?;
     append_event(&mut tx, company_id, user_id, &event).await?;
     tx.commit().await?;
     Ok(())

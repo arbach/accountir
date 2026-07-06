@@ -144,6 +144,17 @@ pub async fn apply<'a>(
                 .execute(&mut **tx)
                 .await?;
         }
+        Event::JournalEntryMemoUpdated {
+            entry_id, new_memo, ..
+        } => {
+            let eid = Uuid::parse_str(entry_id)
+                .map_err(|e| StoreError::Payload(format!("entry_id not uuid: {e}")))?;
+            sqlx::query("UPDATE journal_entries SET memo = $1 WHERE id = $2")
+                .bind(new_memo)
+                .bind(eid)
+                .execute(&mut **tx)
+                .await?;
+        }
         Event::AccountUpdated {
             account_id,
             field,

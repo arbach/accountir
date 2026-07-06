@@ -139,6 +139,12 @@ pub fn validate_event(event: &Event) -> Result<(), ValidationError> {
             validate_non_empty(old_account_id, "old_account_id")?;
             validate_non_empty(new_account_id, "new_account_id")?;
         }
+        Event::JournalEntryMemoUpdated {
+            entry_id, new_memo, ..
+        } => {
+            validate_non_empty(entry_id, "entry_id")?;
+            validate_non_empty(new_memo, "new_memo")?;
+        }
         Event::FiscalYearOpened {
             year: _,
             start_date: _,
