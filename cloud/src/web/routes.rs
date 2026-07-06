@@ -106,6 +106,10 @@ pub fn router() -> Router<AppState> {
         .route("/app/entries/{entry_id}/void", post(entry_void))
         .route("/app/entries/{entry_id}/unvoid", post(entry_unvoid))
         .route("/app/entries/{entry_id}", get(entry_detail_view))
+        .route(
+            "/app/entries/{entry_id}/documents/upload",
+            post(entry_document_upload).layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         .route("/app/entries/{entry_id}/memo", post(entry_memo_update))
         .route("/app/reports", get(reports_index))
         .route("/app/reports/trial-balance", get(trial_balance))
@@ -1392,7 +1396,17 @@ async fn chat_upload(
     // (the owner's personal session can move docs to the company they belong to).
     let mut stored_ids: Vec<(String, Option<Uuid>)> = Vec::new();
     for (fname, bytes) in &files {
-        let ctype = if bytes.starts_with(b"%PDF") { "application/pdf" } else { "text/plain" };
+        let ctype = if bytes.starts_with(b"%PDF") {
+            "application/pdf"
+        } else if bytes.starts_with(b"\x89PNG") {
+            "image/png"
+        } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            "image/jpeg"
+        } else if bytes.starts_with(b"GIF8") {
+            "image/gif"
+        } else {
+            "text/plain"
+        };
         let year = crate::file_store::detect_year(fname, None);
         let id = store_company_file(&state.pool, company_id, "chat", fname, ctype, bytes, year).await;
         stored_ids.push((fname.clone(), id));
@@ -1430,10 +1444,15 @@ async fn chat_upload(
                     "note": format!("Reading {fname} ({} of {total})…", i + 1),
                 }))
                 .await;
+            let is_image = bytes.starts_with(b"\x89PNG")
+                || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+                || bytes.starts_with(b"GIF8");
             let res: Result<String, String> = if bytes.starts_with(b"%PDF") {
                 crate::plaid::statements::extract_text_or_ocr(bytes).await
+            } else if is_image {
+                crate::plaid::statements::ocr_image(bytes).await
             } else if bytes.contains(&0) {
-                Err("unsupported binary format (only PDF and text/CSV are readable)".to_string())
+                Err("unsupported binary format (only PDF, images, and text/CSV are readable)".to_string())
             } else {
                 Ok(String::from_utf8_lossy(bytes).to_string())
             };
@@ -2755,6 +2774,80 @@ async fn entry_detail_view(
         entry,
         accounts,
     })
+}
+
+/// Sniff a content type + sensible filename for a supporting-doc upload when the
+/// browser doesn't supply one (e.g. an image pasted from the clipboard).
+fn sniff_upload(bytes: &[u8], field_ct: &str, field_name: Option<&str>, idx: usize) -> (String, String) {
+    let (ct, ext) = if bytes.starts_with(b"\x89PNG") {
+        ("image/png", "png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        ("image/jpeg", "jpg")
+    } else if bytes.starts_with(b"GIF8") {
+        ("image/gif", "gif")
+    } else if bytes.starts_with(b"%PDF") {
+        ("application/pdf", "pdf")
+    } else if !field_ct.is_empty() && field_ct != "application/octet-stream" {
+        (field_ct, "bin")
+    } else {
+        ("application/octet-stream", "bin")
+    };
+    let name = field_name
+        .filter(|n| !n.trim().is_empty())
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| format!("pasted-{}.{ext}", idx + 1));
+    (ct.to_string(), name)
+}
+
+/// POST /app/entries/{entry_id}/documents/upload — attach a supporting document
+/// (file or pasted image) to a transaction. Stores the file and links it.
+async fn entry_document_upload(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(entry_id): axum::extract::Path<String>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let entry_uuid = match Uuid::parse_str(&entry_id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad entry id").into_response(),
+    };
+    let mut linked = 0usize;
+    let mut idx = 0usize;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() != Some("file") {
+            continue;
+        }
+        let field_ct = field.content_type().unwrap_or("").to_string();
+        let field_name = field.file_name().map(|s| s.to_string());
+        let Ok(bytes) = field.bytes().await else { continue };
+        if bytes.is_empty() {
+            continue;
+        }
+        let (ct, fname) = sniff_upload(&bytes, &field_ct, field_name.as_deref(), idx);
+        idx += 1;
+        if let Some(file_id) =
+            store_company_file(&state.pool, company_id, "tx-doc", &fname, &ct, &bytes, None).await
+        {
+            if crate::queries::link_entry_document(&state.pool, company_id, entry_uuid, file_id, "other")
+                .await
+                .is_ok()
+            {
+                linked += 1;
+            }
+        }
+    }
+    if linked == 0 {
+        return (StatusCode::BAD_REQUEST, "no file uploaded").into_response();
+    }
+    Redirect::to(&format!("/app/entries/{entry_id}")).into_response()
 }
 
 #[derive(Deserialize)]

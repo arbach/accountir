@@ -76,6 +76,38 @@ async fn pdftotext(pdf: &[u8]) -> Result<String, String> {
 
 const OCR_MAX_PAGES: u32 = 25;
 
+/// OCR a raster image (PNG/JPEG/GIF) directly with tesseract.
+pub async fn ocr_image(bytes: &[u8]) -> Result<String, String> {
+    let dir = std::env::temp_dir().join(format!("ocr-img-{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("ocr tmp dir: {e}"))?;
+    let input = dir.join("input");
+    let res = async {
+        tokio::fs::write(&input, bytes).await.map_err(|e| format!("ocr write: {e}"))?;
+        let out = tokio::process::Command::new("tesseract")
+            .arg(&input)
+            .arg("stdout")
+            .arg("--psm")
+            .arg("6")
+            .output()
+            .await
+            .map_err(|e| format!("tesseract failed to start: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "tesseract failed: {}",
+                String::from_utf8_lossy(&out.stderr).chars().take(200).collect::<String>()
+            ));
+        }
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        if text.trim().is_empty() {
+            return Err("no readable text found in the image".into());
+        }
+        Ok(text)
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&dir).await;
+    res
+}
+
 async fn ocr_pdf(pdf: &[u8]) -> Result<String, String> {
     let dir = std::env::temp_dir().join(format!("ocr-{}", uuid::Uuid::new_v4()));
     tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("ocr tmp dir: {e}"))?;

@@ -587,7 +587,7 @@
       <button id="aiw-close" class="btn btn-ghost" style="padding:2px 8px;">&times;</button></span></div>
     <div id="aiw-msgs"><div class="muted" style="font-size:12px;">Loading&hellip;</div></div>
     <form id="aiw-form">
-      <input type="file" id="aiw-file" accept=".pdf,.csv,.txt,.md,.json" multiple style="display:none;">
+      <input type="file" id="aiw-file" accept="image/*,.pdf,.csv,.txt,.md,.json" multiple style="display:none;">
       <button type="button" class="btn btn-ghost" id="aiw-attach" title="Upload a file for the AI (PDF, CSV, text)" style="padding:4px 8px;">&#128206;</button>
       <input id="aiw-input" type="text" placeholder="Ask about your books&hellip;" autocomplete="off">
       <button type="button" class="btn btn-danger" id="aiw-stop" style="display:none;" title="Stop the agent">&#9209;</button>
@@ -822,8 +822,11 @@
     function uploadFiles(fileList) {
       var fs = Array.prototype.slice.call(fileList); if (!fs.length) return;
       var fd = new FormData();
-      fs.forEach(function (f) { fd.append('file', f, f.name); });
-      var names = fs.map(function (f) { return f.name; }).join(', ');
+      fs.forEach(function (f, i) {
+        var name = (f.name && f.name.trim()) ? f.name : ('pasted-' + (i + 1) + (f.type === 'image/png' ? '.png' : f.type === 'image/jpeg' ? '.jpg' : ''));
+        fd.append('file', f, name);
+      });
+      var names = fs.map(function (f, i) { return (f.name && f.name.trim()) ? f.name : ('pasted image ' + (i + 1)); }).join(', ');
       runTurn('\ud83d\udcce Uploaded: ' + names, function (signal) {
         return fetch(withCompany('/app/chat/upload'), { method: 'POST', body: fd, signal: signal });
       });
@@ -845,6 +848,19 @@
         if (!panel.classList.contains('open')) { openPanel(); }
         uploadFiles(e.dataTransfer.files);
       }
+    });
+    // Paste a file or image from the clipboard (only when the panel is open).
+    document.addEventListener('paste', function (e) {
+      if (!panel.classList.contains('open')) return;
+      var dt = e.clipboardData; if (!dt) return;
+      var out = [];
+      if (dt.files && dt.files.length) { out = Array.prototype.slice.call(dt.files); }
+      else if (dt.items) {
+        for (var i = 0; i < dt.items.length; i++) {
+          if (dt.items[i].kind === 'file') { var f = dt.items[i].getAsFile(); if (f) out.push(f); }
+        }
+      }
+      if (out.length) { e.preventDefault(); uploadFiles(out); }
     });
   })();
   </script>

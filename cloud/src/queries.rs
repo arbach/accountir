@@ -1548,6 +1548,33 @@ pub async fn get_entry_detail(
     }))
 }
 
+/// Link an already-stored company file to a journal entry as a supporting
+/// document. Idempotent on (entry_id, file_id).
+pub async fn link_entry_document(
+    pool: &PgPool,
+    company_id: Uuid,
+    entry_id: Uuid,
+    file_id: Uuid,
+    doc_type: &str,
+) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query(
+        "INSERT INTO entry_documents (company_id, entry_id, file_id, doc_type)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (entry_id, file_id) DO NOTHING",
+    )
+    .bind(company_id)
+    .bind(entry_id)
+    .bind(file_id)
+    .bind(doc_type)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// First `0x…` hex wallet address (≥12 chars) found in a string, lowercased.
 fn first_wallet_address(s: &str) -> Option<String> {
     let b = s.as_bytes();

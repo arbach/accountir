@@ -112,7 +112,71 @@
     </table>
   </div>
   {% endif %}
+
+  <div id="doc-drop" tabindex="0"
+       style="margin-top:12px; padding:14px; border:1.5px dashed var(--border-strong,#bbb); border-radius:8px;
+              text-align:center; color:var(--muted,#667); font-size:13px; cursor:pointer; outline:none;">
+    <strong>Add a supporting document</strong> — click to choose, or drag &amp; drop, or
+    <strong>paste</strong> a file/image from your clipboard.
+    <div id="doc-drop-status" class="muted" style="font-size:12px; margin-top:4px;"></div>
+    <input type="file" id="doc-file" multiple
+           accept="image/*,.pdf,.csv,.txt,.md,.json,.xlsx,.docx"
+           style="display:none;">
+  </div>
 </div>
+
+<script>
+  (function () {
+    var zone = document.getElementById('doc-drop');
+    var input = document.getElementById('doc-file');
+    var status = document.getElementById('doc-drop-status');
+    if (!zone) return;
+    var url = '/app/entries/{{ entry.id }}/documents/upload';
+    var busy = false;
+
+    function upload(fileList) {
+      var files = Array.prototype.slice.call(fileList).filter(Boolean);
+      if (!files.length || busy) return;
+      busy = true;
+      var fd = new FormData();
+      files.forEach(function (f, i) {
+        var name = f.name && f.name.trim() ? f.name : ('pasted-' + (i + 1) + (f.type === 'image/png' ? '.png' : ''));
+        fd.append('file', f, name);
+      });
+      status.textContent = 'Uploading ' + files.length + ' file(s)…';
+      fetch(url, { method: 'POST', body: fd })
+        .then(function (r) {
+          if (r.ok || r.status === 303) { location.reload(); }
+          else { return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); }); }
+        })
+        .catch(function (e) { busy = false; status.textContent = 'Upload failed: ' + e.message; });
+    }
+
+    zone.addEventListener('click', function () { input.click(); });
+    input.addEventListener('change', function () { upload(input.files); input.value = ''; });
+    ['dragenter', 'dragover'].forEach(function (ev) {
+      zone.addEventListener(ev, function (e) { e.preventDefault(); zone.style.background = 'rgba(37,99,235,.07)'; zone.style.borderColor = 'var(--accent,#2563eb)'; });
+    });
+    ['dragleave', 'drop'].forEach(function (ev) {
+      zone.addEventListener(ev, function (e) { e.preventDefault(); zone.style.background = ''; zone.style.borderColor = ''; });
+    });
+    zone.addEventListener('drop', function (e) {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) upload(e.dataTransfer.files);
+    });
+    // Paste anywhere on this transaction page attaches to THIS transaction.
+    document.addEventListener('paste', function (e) {
+      var dt = e.clipboardData; if (!dt) return;
+      var out = [];
+      if (dt.files && dt.files.length) { out = Array.prototype.slice.call(dt.files); }
+      else if (dt.items) {
+        for (var i = 0; i < dt.items.length; i++) {
+          if (dt.items[i].kind === 'file') { var f = dt.items[i].getAsFile(); if (f) out.push(f); }
+        }
+      }
+      if (out.length) { e.preventDefault(); upload(out); }
+    });
+  })();
+</script>
 
 <div class="card">
   <h3 style="margin-top:0;">Journal lines</h3>
