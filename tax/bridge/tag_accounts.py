@@ -25,15 +25,20 @@ def generate(entity: str, year: int) -> dict:
     if not rows:
         sys.exit(f"no company matching '{entity}'")
     cid = rows[0][0]
-    pl = pull_pl(cid, year)
-    if not pl:
-        sys.exit(f"no {year} ledger for {entity}")
+    # Classify EVERY active income/expense account (not just those with activity),
+    # so the chart of accounts is fully tax-mapped and future transactions land right.
+    amounts = {num: amt for num, _n, _t, amt in pull_pl(cid, year)}
+    accts = psql(f"""
+        SELECT account_number, name, account_type FROM accounts
+        WHERE company_id = '{cid}' AND account_type IN ('revenue','expense') AND is_active
+        ORDER BY account_number;""")
+    if not accts:
+        sys.exit(f"no accounts for {entity}")
 
     cform = classify_form(entity, form)   # rentals classify against the 8825 columns
     fresh = {"entity": entity, "form": form, "version": 1, "source_year": year, "accounts": {}}
-    for num, name, typ, amt in pl:
-        if abs(amt) < 0.005:
-            continue
+    for num, name, typ in accts:
+        amt = amounts.get(num, 0.0)
         c = C.classify(num, name, typ, amt, cform)
         fresh["accounts"][num] = T.classification_to_tag(c)
 

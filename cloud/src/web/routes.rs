@@ -15,7 +15,7 @@ use crate::auth::password::{hash_password, verify_password};
 use crate::auth::session::{create_session, delete_session, lookup_session, SESSION_COOKIE_NAME};
 use crate::auth::AuthenticatedUser;
 use crate::commands::{
-    account::{create_account, CreateAccountInput},
+    account::{create_account, rename_account, CreateAccountInput},
     entry::{post_entry, EntryLineInput, PostEntryInput},
     mutations::{reassign_line, unvoid_entry, void_entry},
 };
@@ -33,6 +33,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/accounts", get(accounts_list).post(account_create))
         .route("/app/accounts/new", get(account_new))
         .route("/app/accounts/{id}/tax-line", post(account_set_tax_line))
+        .route("/app/accounts/{id}/rename", post(account_rename))
         .route("/app/vendors", get(vendors_list))
         .route(
             "/app/accounts/{id}/upload-statement",
@@ -786,6 +787,40 @@ async fn accounts_list(State(state): State<AppState>, jar: CookieJar) -> Respons
 #[derive(serde::Deserialize)]
 struct TaxLineForm {
     tax_line: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RenameForm {
+    name: String,
+}
+
+/// POST /app/accounts/{id}/rename — rename an account (pencil edit).
+async fn account_rename(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Form(req): Form<RenameForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let account_id = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad account id").into_response(),
+    };
+    match rename_account(&state.pool, company_id, user.id, account_id, &req.name).await {
+        Ok(_) => Redirect::to("/app/accounts").into_response(),
+        Err(AppError::BadRequest(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
+        Err(e) => {
+            tracing::error!(error = ?e, "rename account failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "could not rename").into_response()
+        }
+    }
 }
 
 /// POST /app/accounts/{id}/tax-line — set an account's tax-line tag (HTMX).

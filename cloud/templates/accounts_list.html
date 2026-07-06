@@ -4,6 +4,12 @@
 <style>
   .tax-saved { color: #217346; font-weight: 600; }
   @media (prefers-color-scheme: dark) { .tax-saved { color: #3fb477; } }
+  .acct-name { display: inline-flex; align-items: center; gap: 6px; }
+  .pencil { border: 0; background: transparent; cursor: pointer; color: var(--muted, #888); font-size: 13px; padding: 1px 4px; border-radius: 4px; opacity: 0; transition: opacity .12s; }
+  tr:hover .pencil { opacity: .7; }
+  .pencil:hover { opacity: 1; background: var(--surface-2, #eef); }
+  .rename-form { gap: 6px; align-items: center; margin-top: 2px; }
+  .rename-form input { font-size: 12px; padding: 4px 7px; border: 1px solid var(--border, #ccc); border-radius: 6px; min-width: 200px; }
 </style>
 <div class="page-header">
   <div>
@@ -28,8 +34,18 @@
   <tbody>
   {% for a in accounts %}
     <tr>
-      <td class="num" style="text-align: left;">{{ a.account_number }}</td>
-      <td>{{ a.name }}</td>
+      <td class="num" style="text-align: left;"><a href="/app/transactions?account_id={{ a.id }}" title="View transactions in this account">{{ a.account_number }}</a></td>
+      <td>
+        <span class="acct-name">
+          <a href="/app/transactions?account_id={{ a.id }}" style="color:inherit;" title="View transactions in this account">{{ a.name }}</a>
+          <button type="button" class="pencil" title="Rename account" onclick="var td=this.closest('td'); td.querySelector('.rename-form').style.display='flex'; td.querySelector('.acct-name').style.display='none'; td.querySelector('.rename-form input').focus();">✎</button>
+        </span>
+        <form method="post" action="/app/accounts/{{ a.id }}/rename" class="rename-form" style="display:none;">
+          <input type="text" name="name" value="{{ a.name }}" required>
+          <button type="submit" class="btn btn-primary" style="font-size:11px; padding:3px 9px;">Save</button>
+          <button type="button" class="btn btn-ghost" style="font-size:11px; padding:3px 8px;" onclick="var td=this.closest('td'); td.querySelector('.rename-form').style.display='none'; td.querySelector('.acct-name').style.display='';">✕</button>
+        </form>
+      </td>
       <td><span class="badge">{{ a.account_type }}</span></td>
       <td>
         {% if a.account_type == "revenue" || a.account_type == "expense" %}

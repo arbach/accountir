@@ -144,6 +144,32 @@ pub async fn apply<'a>(
                 .execute(&mut **tx)
                 .await?;
         }
+        Event::AccountUpdated {
+            account_id,
+            field,
+            new_value,
+            ..
+        } => {
+            let id = Uuid::parse_str(account_id)
+                .map_err(|e| StoreError::Payload(format!("account_id not uuid: {e}")))?;
+            // Whitelisted columns only; unknown fields are ignored.
+            let sql = match field.as_str() {
+                "name" => "UPDATE accounts SET name = $2, updated_at_event = $3 WHERE id = $1",
+                "account_number" => {
+                    "UPDATE accounts SET account_number = $2, updated_at_event = $3 WHERE id = $1"
+                }
+                "description" => {
+                    "UPDATE accounts SET description = $2, updated_at_event = $3 WHERE id = $1"
+                }
+                _ => return Ok(()),
+            };
+            sqlx::query(sql)
+                .bind(id)
+                .bind(new_value)
+                .bind(event_id)
+                .execute(&mut **tx)
+                .await?;
+        }
         // Other event types: not needed for v1 webapp; cloud Plaid path uses its own writes.
         _ => {}
     }

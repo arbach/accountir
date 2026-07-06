@@ -20,6 +20,24 @@
       "flags": [],
       "notes": []
     },
+    "4100": {
+      "name": "Prior Year Revenue (2024 Collections)",
+      "category": "service_revenue",
+      "node": "f1120s",
+      "field": "line1a_gross_receipts",
+      "line": "1a Gross receipts",
+      "sign": "signed",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "cash-basis prior-year collection \u2014 confirm cash vs accrual"
+      ],
+      "notes": []
+    },
     "5100": {
       "name": "Rent Expense",
       "category": "rent",
@@ -162,6 +180,42 @@
         "no dedicated f1120s line for 'software' \u2192 line line19_other_deductions (itemized statement)"
       ]
     },
+    "5900": {
+      "name": "Donations & Miscellaneous",
+      "category": "charitable",
+      "node": "schedule_k",
+      "field": "line12a_charitable",
+      "line": "Sch K-12a Charitable contributions",
+      "sign": "abs",
+      "sep": true,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [
+        "charitable \u2014 separately-stated on Sch K (S-corp) / limited on 1120 (C-corp)"
+      ],
+      "notes": []
+    },
+    "6000": {
+      "name": "Professional Services",
+      "category": "professional_fees",
+      "node": "f1120s",
+      "field": "line19_other_deductions",
+      "line": "19 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120s line for 'professional_fees' \u2192 line line19_other_deductions (itemized statement)"
+      ]
+    },
     "6110": {
       "name": "Automobile Expense",
       "category": "auto",
@@ -234,6 +288,24 @@
         "factor 0.5 applied (808.65 \u2192 404.32)"
       ]
     },
+    "6320": {
+      "name": "Insurance",
+      "category": "insurance",
+      "node": "f1120s",
+      "field": "line19_other_deductions",
+      "line": "19 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "high",
+      "status": "auto",
+      "flags": [],
+      "notes": [
+        "no dedicated f1120s line for 'insurance' \u2192 line line19_other_deductions (itemized statement)"
+      ]
+    },
     "7053": {
       "name": "Office Expense",
       "category": "office",
@@ -269,11 +341,46 @@
       "notes": [
         "no dedicated f1120s line for 'travel' \u2192 line line19_other_deductions (itemized statement)"
       ]
+    },
+    "7203": {
+      "name": "Travel - Meals",
+      "category": "meals",
+      "node": "f1120s",
+      "field": "line19_other_deductions",
+      "line": "19 Other (meals, 50%)",
+      "sign": "abs",
+      "sep": false,
+      "factor": 0.5,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [
+        "meals \u2014 apply 50% limit (\u00a7274(n)); some categories are 100%/0%"
+      ],
+      "notes": [
+        "factor 0.5 applied (0.00 \u2192 0.00)"
+      ]
+    },
+    "9999": {
+      "name": "Uncategorized",
+      "category": "other_expense",
+      "node": "f1120s",
+      "field": "line19_other_deductions",
+      "line": "19 Other deductions",
+      "sign": "abs",
+      "sep": false,
+      "factor": null,
+      "excluded": false,
+      "splits": null,
+      "confidence": "medium",
+      "status": "auto",
+      "flags": [
+        "uncategorized/misc \u2014 needs an account-level breakdown for the return"
+      ],
+      "notes": [
+        "no dedicated f1120s line for 'other_expense' \u2192 line line19_other_deductions (itemized statement)"
+      ]
     }
-  },
-  "decisions": {
-    "accounting_method": "accrual",
-    "officer_compensation": "None for 2025 \u2014 the S-corp had an ordinary loss and took no distributions; reasonable-compensation is not required absent profit/distributions (owner, 2026-07-06)",
-    "revenue_basis": "Gross receipts are gross ($90,000); Providersca/Zocdoc are real expenses, not fees netted out of revenue (owner, 2026-07-06)"
   }
 }

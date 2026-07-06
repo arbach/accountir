@@ -14,6 +14,47 @@ pub struct CreateAccountInput {
     pub description: Option<String>,
 }
 
+/// Rename an account (emits AccountUpdated for field "name"). Reads the current
+/// name for the event's old_value, then appends + projects.
+pub async fn rename_account(
+    pool: &PgPool,
+    company_id: Uuid,
+    user_id: Uuid,
+    account_id: Uuid,
+    new_name: &str,
+) -> AppResult<()> {
+    let new_name = new_name.trim();
+    if new_name.is_empty() {
+        return Err(AppError::BadRequest("account name cannot be empty".into()));
+    }
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let old_name: Option<String> =
+        sqlx::query_scalar("SELECT name FROM accounts WHERE id = $1 AND company_id = $2")
+            .bind(account_id)
+            .bind(company_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let old_name = match old_name {
+        Some(n) => n,
+        None => return Err(AppError::BadRequest("account not found".into())),
+    };
+    if old_name == new_name {
+        return Ok(());
+    }
+    let event = Event::AccountUpdated {
+        account_id: account_id.to_string(),
+        field: "name".to_string(),
+        old_value: old_name,
+        new_value: new_name.to_string(),
+    };
+    validate_event(&event).map_err(|e| AppError::BadRequest(format!("invalid rename: {e}")))?;
+    append_event(&mut tx, company_id, user_id, &event).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn create_account(
     pool: &PgPool,
     company_id: Uuid,
