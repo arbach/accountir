@@ -1300,6 +1300,8 @@ pub struct EntryDetail {
     pub source_kind: Option<String>,
     /// Source statement file name, when the entry came from a parsed/uploaded statement.
     pub source_file: Option<String>,
+    /// The exact original description / reference from the statement or source line.
+    pub source_detail: Option<String>,
     /// company_files id for the source statement, so the UI can link to the stored PDF.
     pub source_file_id: Option<Uuid>,
     /// Money flowed from here (the credited account / sending wallet).
@@ -1391,14 +1393,20 @@ pub async fn get_entry_detail(
     });
 
     // Source provenance (statement file / plaid / wise / reclass / manual).
-    let (source_kind, source_file) = sqlx::query(
-        "SELECT source_kind, source_file FROM entry_sources WHERE entry_id = $1",
+    let (source_kind, source_file, source_detail) = sqlx::query(
+        "SELECT source_kind, source_file, source_detail FROM entry_sources WHERE entry_id = $1",
     )
     .bind(entry_id)
     .fetch_optional(&mut *tx)
     .await?
-    .map(|r| (r.get::<String, _>(0).into(), r.get::<Option<String>, _>(1)))
-    .unwrap_or((None, None));
+    .map(|r| {
+        (
+            r.get::<String, _>(0).into(),
+            r.get::<Option<String>, _>(1),
+            r.get::<Option<String>, _>(2),
+        )
+    })
+    .unwrap_or((None, None, None));
 
     // Resolve the source statement to its stored file (for a download link), including the
     // `upload:<name>` reference fallback used by some imports.
@@ -1528,6 +1536,7 @@ pub async fn get_entry_detail(
         vendor,
         source_kind,
         source_file,
+        source_detail,
         source_file_id,
         from,
         to,

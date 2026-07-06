@@ -2652,6 +2652,7 @@ struct EntryDetailTpl {
     flash_kind: Option<String>,
     nav: NavCtx,
     entry: queries::EntryDetail,
+    accounts: Vec<queries::AccountRow>,
 }
 
 /// Full detail for one journal entry: all lines, on-chain provenance (tx hash +
@@ -2701,18 +2702,24 @@ async fn entry_detail_view(
         }
     }
 
+    let accounts = queries::list_accounts(&state.pool, company_id)
+        .await
+        .unwrap_or_default();
     render(EntryDetailTpl {
         user_email: Some(user.email),
         flash: None,
         flash_kind: None,
         nav: build_nav(&state, &jar, user.id).await,
         entry,
+        accounts,
     })
 }
 
 #[derive(Deserialize)]
 struct ReclassifyForm {
     new_account_id: String,
+    /// Optional path to return to (e.g. the entry detail page). Defaults to the list.
+    redirect: Option<String>,
 }
 
 async fn transaction_reclassify(
@@ -2740,7 +2747,12 @@ async fn transaction_reclassify(
     if let Err(e) = reassign_line(&state.pool, company_id, user.id, line_uuid, new_acct).await {
         tracing::error!(error = ?e, "reassign failed");
     }
-    Redirect::to("/app/transactions").into_response()
+    // Return to the entry detail when invoked from there; else the transactions list.
+    let dest = req
+        .redirect
+        .filter(|r| r.starts_with("/app/"))
+        .unwrap_or_else(|| "/app/transactions".to_string());
+    Redirect::to(&dest).into_response()
 }
 
 #[derive(serde::Deserialize)]

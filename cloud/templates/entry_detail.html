@@ -60,6 +60,7 @@
   <h3 style="margin-top:0;">Source</h3>
   <div class="form-row" style="grid-template-columns: 120px 1fr;">
     <div class="muted">Origin</div><div><span class="badge">{{ k }}</span></div>
+    {% match entry.source_detail %}{% when Some with (d) %}<div class="muted">Exact source description</div><div><code style="font-size:12px; word-break:break-all;">{{ d }}</code></div>{% when None %}{% endmatch %}
     {% match entry.source_file %}{% when Some with (f) %}<div class="muted">Statement file</div><div>{% match entry.source_file_id %}{% when Some with (id) %}<a href="/app/documents/{{ id }}/download" target="_blank" rel="noopener">{{ f }} →</a>{% when None %}<strong>{{ f }}</strong>{% endmatch %}</div>{% when None %}{% endmatch %}
   </div>
 </div>
@@ -111,9 +112,18 @@
     <table>
       <thead><tr><th>Account</th><th>Memo</th><th class="num" title="Debit — money IN for asset/bank accounts (money OUT for expense accounts)">Debit · IN</th><th class="num" title="Credit — money OUT for asset/bank accounts (money IN for income accounts)">Credit · OUT</th></tr></thead>
       <tbody>
-      {% for l in entry.lines %}
+      {% for l in entry.lines %}{# per-line account + move-to-account control #}
         <tr>
-          <td>{{ l.account_number }} — {{ l.account_name }}</td>
+          <td>
+            <div>{{ l.account_number }} — {{ l.account_name }}</div>
+            <form method="post" action="/app/transactions/{{ l.line_id }}/reclassify" style="display:inline-flex; gap:5px; align-items:center; margin-top:4px;">
+              <input type="hidden" name="redirect" value="/app/entries/{{ entry.id }}">
+              <select name="new_account_id" style="font-size:11px; padding:2px 5px; max-width:210px;">
+                {% for a in accounts %}<option value="{{ a.id }}"{% if a.id == l.account_id %} selected{% endif %}>{{ a.account_number }} — {{ a.name }}</option>{% endfor %}
+              </select>
+              <button type="submit" class="btn btn-ghost" style="font-size:11px; padding:2px 9px;" title="Move this line to another account">Move →</button>
+            </form>
+          </td>
           <td class="muted">{% match l.memo %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %}</td>
           <td class="num">{{ l.debit_display() }}</td>
           <td class="num">{{ l.credit_display() }}</td>
