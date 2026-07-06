@@ -1350,6 +1350,10 @@ impl EntryDocument {
             format!("{:.1} MB", b / (1024.0 * 1024.0))
         }
     }
+    /// True when this document is a viewable raster image.
+    pub fn is_image(&self) -> bool {
+        self.content_type.starts_with("image/")
+    }
 }
 
 #[derive(Debug, Clone)]

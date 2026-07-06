@@ -111,11 +111,20 @@
           <td>
             <a href="/app/documents/{{ d.file_id }}/download" target="_blank" rel="noopener">{{ d.filename }}</a>
             {% match d.note %}{% when Some with (n) %}<div class="muted" style="font-size:12px; margin-top:2px;">{{ n }}</div>{% when None %}{% endmatch %}
+            {% if d.is_image() %}
+            <img class="doc-thumb" src="/app/documents/{{ d.file_id }}/download" alt="{{ d.filename }}"
+                 data-full="/app/documents/{{ d.file_id }}/download" onclick="docLightbox(this.dataset.full)"
+                 style="display:block; margin-top:6px; max-height:72px; max-width:180px; border:1px solid var(--border,#ddd); border-radius:4px; cursor:zoom-in;">
+            {% endif %}
           </td>
           <td><span class="badge">{{ d.doc_type }}</span></td>
           <td class="num">{{ d.size_display() }}</td>
           <td>
             <div class="doc-actions" style="display:flex; gap:4px; align-items:center;">
+              {% if d.is_image() %}
+              <button type="button" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;"
+                onclick="docLightbox('/app/documents/{{ d.file_id }}/download')">View</button>
+              {% endif %}
               <a href="/app/documents/{{ d.file_id }}/download" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">Download</a>
               <button type="button" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;"
                 onclick="var r=this.closest('tr'); r.querySelector('.doc-edit').style.display='flex'; this.closest('.doc-actions').style.display='none';">Edit</button>
@@ -222,6 +231,22 @@
       setTimeout(function () { location.reload(); }, 6000);
     })();
   })();
+</script>
+
+<div id="doc-lightbox" onclick="this.style.display='none'"
+     style="display:none; position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,.82);
+            align-items:center; justify-content:center; cursor:zoom-out;">
+  <img id="doc-lightbox-img" src="" alt="document"
+       style="max-width:92vw; max-height:92vh; box-shadow:0 4px 40px rgba(0,0,0,.5); border-radius:4px;">
+</div>
+<script>
+  function docLightbox(url) {
+    document.getElementById('doc-lightbox-img').src = url;
+    document.getElementById('doc-lightbox').style.display = 'flex';
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { document.getElementById('doc-lightbox').style.display = 'none'; }
+  });
 </script>
 
 <div class="card">
