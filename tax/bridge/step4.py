@@ -186,6 +186,8 @@ def main():
     ap.add_argument("--entity", required=True, choices=list(ENTITIES))
     ap.add_argument("--year", type=int, default=2025)
     ap.add_argument("--json", metavar="PATH", help="write machine-readable mapping JSON for the UI")
+    ap.add_argument("--fill", action="store_true",
+                    help="write the full set of computed form lines (engine output) to out/<entity>_<year>_fill.json — the authoritative values to fill onto the PDF")
     ap.add_argument("--no-compute", action="store_true", help="skip the engine compute")
     args = ap.parse_args()
     label, etype, form = ENTITIES[args.entity]
@@ -300,6 +302,30 @@ def main():
         delta = round((computed or 0) - recon_target, 2)
         print(f"    delta                       : {delta:>14,.2f}   "
               f"{'OK (ties)' if abs(delta) < 0.5 else 'DELTA → review'}")
+
+        # ── Engine output for form-filling (authoritative computed lines) ──────
+        if args.fill:
+            # Flatten every node's computed lines to scalars (last element of an
+            # accumulation array is the node's own output). This is what a form
+            # filler stamps onto the PDF — provably the OpenTax engine's numbers.
+            lines = {}
+            for node, fields_ in pend.items():
+                if not isinstance(fields_, dict):
+                    continue
+                for fld, v in fields_.items():
+                    v = v[-1] if isinstance(v, list) else v
+                    if isinstance(v, (int, float)):
+                        lines[f"{node}.{fld}"] = round(float(v), 2)
+            fill = {
+                "entity": args.entity, "form": form, "year": args.year,
+                "reconciles": abs(delta) < 0.5, "delta": delta,
+                "book_net": book_net, "recon_target": recon_target, "computed": computed,
+                "return_id": rid, "lines": dict(sorted(lines.items())),
+            }
+            fill_path = os.path.join(OUT_DIR, f"{args.entity}_{args.year}_fill.json")
+            with open(fill_path, "w") as f:
+                json.dump(fill, f, indent=2)
+            print(f"    engine fill output ({len(lines)} lines) → {os.path.relpath(fill_path, HERE)}")
 
     # ── Machine-readable mapping for the UI ──────────────────────────────────
     if args.json:

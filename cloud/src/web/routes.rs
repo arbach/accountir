@@ -2933,14 +2933,21 @@ async fn tax_filing(
         (2, "agent", format!("Next: AI reviews the books & prepares {tax_year} forms"), format!(
             "Let's file my {tax_year} taxes for {company_name}. First, review the {tax_year} books \
              using the accounting protocol and tell me what you found or fixed. Then determine which \
-             IRS forms a {entity_label} needs, pull them, and complete them from the ledger. \
+             IRS forms a {entity_label} needs and pull them. \
+             Compute every return with the OpenTax engine of record — run \
+             `python3 tax/bridge/step4.py --entity <slug> --year {tax_year} --fill` (each account is \
+             mapped to its tax line via the tax_account_lines tag store, editable on the Accounts page) \
+             and confirm it reconciles to the book net; then fill each form line-for-line from that \
+             engine output (tax/bridge/out/<entity>_{tax_year}_fill.json). Do not hand-compute the numbers. \
              Stop before approval — I will review and approve the filled forms on the Tax page myself."
         ))
     } else if has_status("fetched") {
         (4, "agent", "Next: AI completes the pulled forms".to_string(), format!(
-            "Continue my {tax_year} tax filing for {company_name}: complete the already-pulled IRS \
-             forms from the ledger, line by line. Stop before approval — I will review and approve \
-             the filled forms on the Tax page myself."
+            "Continue my {tax_year} tax filing for {company_name}: compute the return with the OpenTax \
+             engine of record — run `python3 tax/bridge/step4.py --entity <slug> --year {tax_year} --fill`, \
+             confirm it reconciles to the book net, and fill each already-pulled IRS form line-for-line \
+             from that engine output (tax/bridge/out/<entity>_{tax_year}_fill.json). Do not hand-compute. \
+             Stop before approval — I will review and approve the filled forms on the Tax page myself."
         ))
     } else if has_status("filled") {
         (5, "approve", "Next: review & approve the filled forms".to_string(), String::new())
