@@ -1064,7 +1064,23 @@ pub async fn list_transactions(
           -- tagged on the expense line, which would otherwise be excluded here).
           AND (cardinality($3::uuid[]) > 0 OR $10::text IS NOT NULL OR a.account_type IN ('asset', 'liability'))
           AND ($4::text IS NULL OR je.source::text = $4)
-          AND ($5::text IS NULL OR je.memo ILIKE '%' || $5 || '%')
+          -- Keyword search across the memo, reference, category, and any line's
+          -- account (name/number) or vendor. EXISTS keeps it at the entry level
+          -- so matches on a non-bank line still show the (bank-side) row once.
+          AND ($5::text IS NULL OR (
+                 je.memo ILIKE '%' || $5 || '%'
+              OR je.reference ILIKE '%' || $5 || '%'
+              OR ec.category ILIKE '%' || $5 || '%'
+              OR EXISTS (
+                   SELECT 1 FROM journal_lines jl2
+                   JOIN accounts a2 ON a2.id = jl2.account_id
+                   LEFT JOIN vendors v2 ON v2.id = jl2.vendor_id
+                   WHERE jl2.entry_id = je.id
+                     AND (a2.name ILIKE '%' || $5 || '%'
+                       OR a2.account_number ILIKE '%' || $5 || '%'
+                       OR v2.name ILIKE '%' || $5 || '%')
+                 )
+          ))
           AND ($6::boolean = true OR je.is_void = false)
           AND ($7::text IS NULL
                OR ($7 = 'debit' AND jl.amount > 0)

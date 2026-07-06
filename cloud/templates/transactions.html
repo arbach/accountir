@@ -84,7 +84,7 @@
     </label>
     <label class="field"><span class="label-text">Min amount</span><input type="text" name="min_amount" value="{{ min_amount_str }}" placeholder="$ min" inputmode="decimal" style="width: 90px;"></label>
     <label class="field"><span class="label-text">Max amount</span><input type="text" name="max_amount" value="{{ max_amount_str }}" placeholder="$ max" inputmode="decimal" style="width: 90px;"></label>
-    <label class="field"><span class="label-text">Search memo</span><input type="text" name="search" value="{{ search.as_deref().unwrap_or("") }}" placeholder="text in memo"></label>
+    <label class="field"><span class="label-text">Search</span><input type="text" name="search" value="{{ search.as_deref().unwrap_or("") }}" placeholder="keyword: memo, vendor, account, ref…" title="Searches the memo, reference, category, account name/number, and vendor"></label>
     <label class="field"><span class="label-text">Sort by</span>
       <select name="sort" onchange="if(window.saveFilters)saveFilters(this.form); this.form.submit();">
         <option value="date_desc" {% if selected_sort == "date_desc" %}selected{% endif %}>Date (newest first)</option>
