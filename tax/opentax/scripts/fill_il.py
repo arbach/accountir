@@ -30,11 +30,12 @@ def fill(form, tmpl, out, net, tax):
     vals = {}
     for which, subs in SPECS[form]:
         amt = net if which == "net" else tax
-        if not amt:
+        if amt == 0:
             continue
         key = find_key(flds, subs)
         if key:
-            vals[key] = str(round(amt))
+            # Losses print in parentheses (IL convention); tax is never negative.
+            vals[key] = f"({abs(round(amt)):,})" if amt < 0 else f"{round(amt):,}"
         else:
             print(f"  !! no field for {which} ({subs})")
     w = PdfWriter()
@@ -59,4 +60,4 @@ def fill(form, tmpl, out, net, tax):
 
 if __name__ == "__main__":
     form, tmpl, out, net, tax = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4]), float(sys.argv[5])
-    fill(form, tmpl, out, net if net > 0 else 0, tax)
+    fill(form, tmpl, out, net, tax)
