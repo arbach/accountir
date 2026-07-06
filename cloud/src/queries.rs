@@ -1575,6 +1575,82 @@ pub async fn link_entry_document(
     Ok(())
 }
 
+/// Set the classification + note on a linked supporting document (after the AI
+/// has parsed it).
+pub async fn annotate_entry_document(
+    pool: &PgPool,
+    company_id: Uuid,
+    entry_id: Uuid,
+    file_id: Uuid,
+    doc_type: &str,
+    note: &str,
+) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query(
+        "UPDATE entry_documents SET doc_type = $3, note = $4
+         WHERE entry_id = $1 AND file_id = $2",
+    )
+    .bind(entry_id)
+    .bind(file_id)
+    .bind(doc_type)
+    .bind(note)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Lightweight transaction context (for AI document reconciliation): the memo,
+/// date, signed line amounts by account, and any current category.
+pub async fn entry_context_text(
+    pool: &PgPool,
+    company_id: Uuid,
+    entry_id: Uuid,
+) -> AppResult<Option<String>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let hdr = sqlx::query(
+        "SELECT je.date, je.memo, ec.category
+         FROM journal_entries je
+         LEFT JOIN entry_categories ec ON ec.entry_id = je.id
+         WHERE je.id = $1",
+    )
+    .bind(entry_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(h) = hdr else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let date: NaiveDate = h.get(0);
+    let memo: String = h.get::<Option<String>, _>(1).unwrap_or_default();
+    let category: Option<String> = h.get(2);
+    let lines = sqlx::query(
+        "SELECT a.account_number, a.name, jl.amount
+         FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id
+         WHERE jl.entry_id = $1 ORDER BY jl.amount DESC",
+    )
+    .bind(entry_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut out = format!("Date: {date}\nMemo: {memo}\n");
+    if let Some(c) = category {
+        out.push_str(&format!("Current category: {c}\n"));
+    }
+    out.push_str("Journal lines (cents, debit +, credit -):\n");
+    for l in &lines {
+        let num: String = l.get(0);
+        let name: String = l.get(1);
+        let amt: i64 = l.get(2);
+        out.push_str(&format!("  {num} {name}: {}\n", format_cents(amt)));
+    }
+    Ok(Some(out))
+}
+
 /// First `0x…` hex wallet address (≥12 chars) found in a string, lowercased.
 fn first_wallet_address(s: &str) -> Option<String> {
     let b = s.as_bytes();

@@ -175,6 +175,17 @@
       }
       if (out.length) { e.preventDefault(); upload(out); }
     });
+
+    // While a just-uploaded document is still being analysed by the AI, poll
+    // for the result (the note changes from "Analyzing…" to the summary).
+    (function () {
+      var analysing = (document.body.innerText || '').indexOf('Analyzing document') !== -1;
+      if (!analysing) { sessionStorage.removeItem('doc-poll'); return; }
+      var n = parseInt(sessionStorage.getItem('doc-poll') || '0', 10);
+      if (n >= 8) { sessionStorage.removeItem('doc-poll'); return; }
+      sessionStorage.setItem('doc-poll', n + 1);
+      setTimeout(function () { location.reload(); }, 6000);
+    })();
   })();
 </script>
 

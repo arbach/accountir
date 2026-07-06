@@ -2841,6 +2841,22 @@ async fn entry_document_upload(
                 .is_ok()
             {
                 linked += 1;
+                // Mark as pending, then analyse + reconcile against the tx in the
+                // background so the upload response returns immediately.
+                let _ = crate::queries::annotate_entry_document(
+                    &state.pool, company_id, entry_uuid, file_id, "other", "⏳ Analyzing document…",
+                )
+                .await;
+                let pool = state.pool.clone();
+                let data = bytes.to_vec();
+                let fname_bg = fname.clone();
+                let uid = user.id;
+                tokio::spawn(async move {
+                    crate::doc_ai::process_entry_document(
+                        pool, company_id, uid, entry_uuid, file_id, fname_bg, data,
+                    )
+                    .await;
+                });
             }
         }
     }
