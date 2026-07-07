@@ -56,8 +56,8 @@
   <div class="form-row" style="grid-template-columns: 120px 1fr;">
     <div class="muted">Chain</div><div>{{ c.chain }}</div>
     <div class="muted">Tx hash</div><div><code>{{ c.tx_hash }}</code></div>
-    {% match c.from_address %}{% when Some with (a) %}<div class="muted">From</div><div><code>{{ a }}</code>{% match c.from_url() %}{% when Some with (u) %} <a href="{{ u }}" target="_blank" rel="noopener">↗</a>{% when None %}{% endmatch %}</div>{% when None %}{% endmatch %}
-    {% match c.to_address %}{% when Some with (a) %}<div class="muted">To</div><div><code>{{ a }}</code>{% match c.to_url() %}{% when Some with (u) %} <a href="{{ u }}" target="_blank" rel="noopener">↗</a>{% when None %}{% endmatch %}</div>{% when None %}{% endmatch %}
+    {% match c.from_address %}{% when Some with (a) %}<div class="muted">From</div><div><code>{{ a }}</code>{% match c.from_url() %}{% when Some with (u) %} <a href="{{ u }}" target="_blank" rel="noopener">↗</a>{% when None %}{% endmatch %}{% match c.from_name %}{% when Some with (n) %} · <strong>{{ n }}</strong>{% when None %}{% endmatch %}</div>{% when None %}{% endmatch %}
+    {% match c.to_address %}{% when Some with (a) %}<div class="muted">To</div><div><code>{{ a }}</code>{% match c.to_url() %}{% when Some with (u) %} <a href="{{ u }}" target="_blank" rel="noopener">↗</a>{% when None %}{% endmatch %}{% match c.to_name %}{% when Some with (n) %} · <strong>{{ n }}</strong>{% when None %}{% endmatch %}</div>{% when None %}{% endmatch %}
     {% match c.symbol %}{% when Some with (s) %}<div class="muted">Asset</div><div>{{ s }}{% match c.direction %}{% when Some with (d) %} · {{ d }}{% when None %}{% endmatch %}</div>{% when None %}{% endmatch %}
     <div class="muted">Verification</div>
     <div>

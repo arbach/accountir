@@ -2786,6 +2786,15 @@ async fn entry_detail_view(
             ep.wallet_name = labels.get(&w.to_lowercase()).cloned();
         }
     }
+    // Same for the on-chain from/to wallets on a crypto entry.
+    if let Some(c) = entry.crypto.as_mut() {
+        if let Some(a) = &c.from_address {
+            c.from_name = labels.get(&a.to_lowercase()).cloned();
+        }
+        if let Some(a) = &c.to_address {
+            c.to_name = labels.get(&a.to_lowercase()).cloned();
+        }
+    }
 
     let accounts = queries::list_accounts(&state.pool, company_id)
         .await

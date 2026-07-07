@@ -1317,6 +1317,9 @@ pub struct CryptoProvenance {
     pub direction: Option<String>,
     pub from_address: Option<String>,
     pub to_address: Option<String>,
+    /// Address-book names for the on-chain from/to wallets (filled by the handler).
+    pub from_name: Option<String>,
+    pub to_name: Option<String>,
 }
 
 impl CryptoProvenance {
@@ -1480,6 +1483,8 @@ pub async fn get_entry_detail(
         direction: r.get(7),
         from_address: r.get(8),
         to_address: r.get(9),
+        from_name: None,
+        to_name: None,
     });
 
     // Source provenance (statement file / plaid / wise / reclass / manual).
