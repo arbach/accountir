@@ -9,6 +9,7 @@ pub mod email;
 pub mod error;
 pub mod file_store;
 pub mod http;
+pub mod onchain;
 pub mod plaid;
 pub mod queries;
 pub mod signature;
