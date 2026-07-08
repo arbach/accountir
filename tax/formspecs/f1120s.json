@@ -1,0 +1,29 @@
+{
+  "_doc": "Maps f1120-S AcroForm fields to their source: profile.<key>, compute.<line>, or literal:<val>. Drives auto-fill + review.",
+  "identity": {
+    "topmostSubform[0].Page1[0].Date_Name_ReadOrder[0].f1_4[0]": "profile.legal_name",
+    "topmostSubform[0].Page1[0].f1_13[0]":                        "profile.ein",
+    "topmostSubform[0].Page1[0].Date_Name_ReadOrder[0].f1_5[0]": "profile.address.line",
+    "topmostSubform[0].Page1[0].Date_Name_ReadOrder[0].f1_7[0]": "profile.address.city_state_zip",
+    "topmostSubform[0].Page1[0].ABC[0].f1_11[0]":                "profile.s_election_effective",
+    "topmostSubform[0].Page1[0].ABC[0].f1_12[0]":                "profile.business_activity_code",
+    "topmostSubform[0].Page1[0].f1_14[0]":                       "profile.date_formed"
+  },
+  "amounts": {
+    "topmostSubform[0].Page1[0].f1_16[0]": "compute.shareholders",
+    "topmostSubform[0].Page1[0].f1_17[0]": "compute.line1a_gross_receipts",
+    "topmostSubform[0].Page1[0].f1_19[0]": "compute.line1c_balance",
+    "topmostSubform[0].Page1[0].f1_21[0]": "compute.line3_gross_profit",
+    "topmostSubform[0].Page1[0].f1_24[0]": "compute.line6_total_income",
+    "topmostSubform[0].Page1[0].f1_29[0]": "compute.line11_rents",
+    "topmostSubform[0].Page1[0].f1_30[0]": "compute.line12_taxes",
+    "topmostSubform[0].Page1[0].f1_34[0]": "compute.line16_advertising",
+    "topmostSubform[0].Page1[0].f1_38[0]": "compute.line20_other_deductions",
+    "topmostSubform[0].Page1[0].f1_39[0]": "compute.line21_total_deductions",
+    "topmostSubform[0].Page1[0].f1_40[0]": "compute.line22_ordinary_income",
+    "topmostSubform[0].Page3[0].f3_3[0]":  "compute.sch_k_line1_ordinary"
+  },
+  "checkboxes": {
+    "topmostSubform[0].Page2[0].c2_1[0]": "profile.accounting_method==cash"
+  }
+}

@@ -227,6 +227,16 @@ pub fn schemas() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "review_tax_form",
+            "description": "Run the deterministic + per-item AI step-4 review on a filled tax form: it loops every intended field and has the AI check each against the booking/profile. Returns pass/fail per field. A form must pass this before the user approves it.",
+            "input_schema": {"type": "object", "properties": {"form_id": {"type": "string"}}, "required": ["form_id"]}
+        }),
+        json!({
+            "name": "prepare_tax_return",
+            "description": "Auto-prepare an entity's full return for a year: determine required forms, fill each from its formspec + computed values + tax profile, and run the step-4 review on each. Returns a per-form readiness summary. The return must already be computed and blank forms fetched. This is the end-to-end 'do taxes for <entity> <year>'.",
+            "input_schema": {"type": "object", "properties": {"entity_key": {"type": "string"}, "year": {"type": "integer"}}, "required": ["entity_key", "year"]}
+        }),
+        json!({
             "name": "create_report",
             "description": "Generate a saved report document that appears under Reports → Tax Documents and can be saved as PDF. Use type 'tax_package' to complete the full year-end tax documents (income statement + balance sheet + cash flow + trial balance for a year). Returns the document URL — navigate the user there afterwards.",
             "input_schema": {
@@ -340,6 +350,8 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "fetch_tax_form" => fetch_tax_form_tool(ctx, input).await,
         "get_tax_form_fields" => tax_form_fields_tool(ctx, input).await,
         "fill_tax_form" => fill_tax_form_tool(ctx, input).await,
+        "review_tax_form" => review_tax_form_tool(ctx, input).await,
+        "prepare_tax_return" => prepare_tax_return_tool(ctx, input).await,
         "list_tax_forms" => list_tax_forms_tool(ctx).await,
         "mail_tax_form" => mail_tax_form_tool(ctx, input).await,
         "void_entry" => void_entry_tool(ctx, input, false).await,
@@ -831,6 +843,46 @@ async fn fill_tax_form_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
             "ok": true, "result": res,
             "review_url": format!("/app/tax/forms/{id}/pdf"),
             "next": "ask the user to review the PDF and click Approve on /app/tax",
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn review_tax_form_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let Some(id) = input.get("form_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return json!({ "error": "form_id must be a UUID" });
+    };
+    let model = std::env::var("TAX_REVIEW_MODEL").unwrap_or_else(|_| "sonnet".to_string());
+    match crate::tax::review_form_by_id(ctx.pool, ctx.company_id, id, &model).await {
+        Ok(r) => json!({
+            "ok": true, "all_ok": r.all_ok,
+            "issues": r.failures().iter().map(|v| format!("{}: {}", v.line, v.note)).collect::<Vec<_>>(),
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn prepare_tax_return_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let Some(entity_key) = input.get("entity_key").and_then(|v| v.as_str()) else {
+        return json!({ "error": "entity_key required" });
+    };
+    let year = input.get("year").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    // profile as JSON (all columns) for the formspec resolver
+    let profile: Value = sqlx::query_scalar::<_, Value>(
+        "SELECT to_jsonb(tp) FROM tax_profiles tp WHERE company_id = $1",
+    )
+    .bind(ctx.company_id)
+    .fetch_optional(ctx.pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| json!({}));
+    let model = std::env::var("TAX_REVIEW_MODEL").unwrap_or_else(|_| "sonnet".to_string());
+    match crate::tax::prepare::prepare_return(ctx.pool, ctx.company_id, entity_key, year, &profile, &model).await {
+        Ok(forms) => json!({
+            "ok": true, "forms": forms,
+            "next": "tell the user to review each form's PDF on /app/tax and Approve when satisfied",
         }),
         Err(e) => json!({ "error": format!("{e}") }),
     }

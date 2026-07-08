@@ -13,6 +13,7 @@ pub mod onchain;
 pub mod plaid;
 pub mod queries;
 pub mod signature;
+pub mod statement_processor;
 pub mod statement_upload;
 pub mod store;
 pub mod tax;

@@ -1,4 +1,5 @@
-//! Tax filing pipeline: pull official IRS form PDFs, fill them (pypdf helper),
+//! Tax filing pipeline: pull official IRS form PDFs, fill them by AcroForm field
+//! name via the taxpdf.ts helper (deterministic placement),
 //! gate on user approval, and mail them via Lob. Forms live on disk under
 //! TAX_FORMS_DIR; metadata + status in the tax_forms table.
 //!
@@ -6,6 +7,9 @@
 //! The mail step refuses anything not user-approved.
 
 pub mod lob;
+pub mod runtime;
+pub mod review;
+pub mod prepare;
 
 use std::path::PathBuf;
 
@@ -22,8 +26,8 @@ pub fn forms_dir() -> PathBuf {
         .into()
 }
 
-fn pdfform_bin() -> String {
-    std::env::var("PDFFORM_BIN").unwrap_or_else(|_| "/usr/local/lib/accountir/pdfform.py".to_string())
+fn taxpdf_bin() -> String {
+    std::env::var("TAXPDF_BIN").unwrap_or_else(|_| "/usr/local/lib/accountir/tax/taxpdf.ts".to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -227,7 +231,66 @@ async fn update_status(
     Ok(())
 }
 
+/// Step-4 review gate: deterministically loop every intended field on the form
+/// (from the booking-derived fill spec stored in `fields`), read what is ACTUALLY
+/// on the PDF, and have the AI judge each item's correctness. A form can only be
+/// approved when every item passes. Optional `{form_code}.json` under the specs
+/// dir maps opaque field names to human line labels for a sharper AI judgment.
+pub async fn review_form_by_id(
+    pool: &PgPool,
+    company_id: Uuid,
+    id: Uuid,
+    model: &str,
+) -> AppResult<review::FormReview> {
+    let form = get_form(pool, company_id, id).await?.ok_or(AppError::NotFound)?;
+    // intended values = the booking-derived fill spec applied to this form
+    let spec: Value = sqlx::query_scalar::<_, Value>(
+        "SELECT COALESCE(fields, '{}'::jsonb) FROM tax_forms WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or_else(|_| json!({}));
+    // optional field -> line-label map for sharper judgments
+    let specs_dir = std::env::var("TAX_FORMSPECS_DIR")
+        .unwrap_or_else(|_| "/usr/local/lib/accountir/tax/formspecs".to_string());
+    let labels: Value = std::fs::read_to_string(
+        std::path::Path::new(&specs_dir).join(format!("{}.json", form.form_code)),
+    )
+    .ok()
+    .and_then(|s| serde_json::from_str(&s).ok())
+    .unwrap_or_else(|| json!({}));
+    let label_of = |field: &str| -> String {
+        labels.get(field).and_then(|v| v.as_str()).unwrap_or(field).to_string()
+    };
+    // build the deterministic item list from the intended spec
+    let mut items: Vec<Value> = Vec::new();
+    for (field, v) in spec.get("amounts").and_then(|a| a.as_object()).into_iter().flatten() {
+        items.push(json!({ "line": label_of(field), "field": field, "expected": v, "kind": "amount" }));
+    }
+    for (field, v) in spec.get("text").and_then(|a| a.as_object()).into_iter().flatten() {
+        items.push(json!({ "line": label_of(field), "field": field, "expected": v, "kind": "text" }));
+    }
+    if let Some(arr) = spec.get("check").and_then(|c| c.as_array()) {
+        for field in arr.iter().filter_map(|c| c.as_str()) {
+            items.push(json!({ "line": label_of(field), "field": field, "checkbox": field, "kind": "checkbox" }));
+        }
+    }
+    Ok(review::review_form(model, &form.form_code, &form.file_path, &items).await)
+}
+
 pub async fn approve_form(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<()> {
+    // HARD GATE: the deterministic-loop + per-item AI review must pass first.
+    let model = std::env::var("TAX_REVIEW_MODEL").unwrap_or_else(|_| "sonnet".to_string());
+    let review = review_form_by_id(pool, company_id, id, &model).await?;
+    if !review.all_ok {
+        let fails: Vec<String> = review.failures().iter().map(|f| format!("{}: {}", f.line, f.note)).collect();
+        return Err(AppError::BadRequest(format!(
+            "review failed ({} issue(s)): {}",
+            fails.len(),
+            fails.join("; ")
+        )));
+    }
     update_status(pool, company_id, id, "approved").await
 }
 
@@ -281,7 +344,7 @@ pub async fn sign_form(
     }
 
     // How many pages? Needed to resolve a from-the-end page index.
-    let listed = run_pdfform(&["list", &form.file_path]).map_err(AppError::BadRequest)?;
+    let listed = run_taxpdf(&["list", &form.file_path]).map_err(AppError::BadRequest)?;
     let pages = listed.get("pages").and_then(|p| p.as_i64()).unwrap_or(1).max(1);
     let a = signature_anchor(&form.form_code);
     let page = if a.page < 0 { (pages + a.page).max(0) } else { a.page.min(pages - 1) };
@@ -298,7 +361,7 @@ pub async fn sign_form(
     std::fs::write(&spec_path, serde_json::to_vec(&spec).unwrap_or_default())
         .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
     let out_path = format!("{}.signed.pdf", form.file_path);
-    let res = run_pdfform(&["stamp", &form.file_path, &out_path, spec_path.to_str().unwrap_or_default()]);
+    let res = run_taxpdf(&["stamp", &form.file_path, spec_path.to_str().unwrap_or_default(), &out_path]);
     let _ = std::fs::remove_file(&sig_path);
     let _ = std::fs::remove_file(&spec_path);
     res.map_err(AppError::BadRequest)?;
@@ -331,14 +394,23 @@ pub async fn delete_form(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult
     Ok(())
 }
 
-fn run_pdfform(args: &[&str]) -> Result<Value, String> {
-    let out = std::process::Command::new(pdfform_bin())
-        .args(args)
-        .output()
-        .map_err(|e| format!("pdfform helper failed to start: {e}"))?;
+/// Run the single Deno PDF helper (`taxpdf.ts`): fill | dump | list | stamp.
+/// Field-name filling (deterministic placement) — replaces the old pdfform.py.
+fn run_taxpdf(args: &[&str]) -> Result<Value, String> {
+    let deno = std::env::var("DENO_BIN").unwrap_or_else(|_| "/usr/local/bin/deno".to_string());
+    let bin = taxpdf_bin();
+    let mut full: Vec<&str> = vec!["run", "--allow-read", "--allow-write", &bin];
+    full.extend_from_slice(args);
+    let out = runtime::run("taxpdf", &deno, &full)?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let v: Value = serde_json::from_str(stdout.trim())
-        .map_err(|_| format!("pdfform helper bad output: {}", stdout.chars().take(200).collect::<String>()))?;
+    // pdf-lib prints a benign XFA notice on stdout; take the last JSON line.
+    let line = stdout
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with('{'))
+        .unwrap_or_else(|| stdout.trim());
+    let v: Value = serde_json::from_str(line.trim())
+        .map_err(|_| format!("taxpdf helper bad output: {}", stdout.chars().take(200).collect::<String>()))?;
     if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
         return Err(err.to_string());
     }
@@ -394,21 +466,17 @@ pub fn compute_return(entity_key: &str, year: i32) -> Result<ComputeResult, Stri
     } else {
         ("step4.py", &[])
     };
-    let path = std::env::var("PATH").unwrap_or_default();
-    let mut args: Vec<String> = vec![
-        format!("{}/{script}", bridge_dir()),
-        "--entity".into(), entity_key.into(),
-        "--year".into(), year.to_string(),
-        "--fill".into(),
+    let _ = (&out_dir, &deno_dir); // env now applied centrally by runtime::run
+    let script_path = format!("{}/{script}", bridge_dir());
+    let year_s = year.to_string();
+    let mut args: Vec<&str> = vec![
+        &script_path,
+        "--entity", entity_key,
+        "--year", &year_s,
+        "--fill",
     ];
-    args.extend(extra.iter().map(|s| s.to_string()));
-    let output = std::process::Command::new("python3")
-        .args(&args)
-        .env("BRIDGE_OUT", &out_dir)
-        .env("DENO_DIR", &deno_dir)
-        .env("PATH", format!("/usr/local/bin:/usr/bin:/bin:{path}"))
-        .output()
-        .map_err(|e| format!("engine failed to start: {e}"))?;
+    args.extend_from_slice(extra);
+    let output = runtime::run("compute.bridge", "python3", &args)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let msg: String = stderr
@@ -477,7 +545,7 @@ pub async fn fetch_form(
     let path = dir.join(format!("{form_code}-{year}-{id}.pdf"));
     std::fs::write(&path, &bytes).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
 
-    let fields = run_pdfform(&["list", path.to_str().unwrap_or_default()])
+    let fields = run_taxpdf(&["list", path.to_str().unwrap_or_default()])
         .map_err(AppError::BadRequest)?;
 
     let title = title
@@ -505,7 +573,7 @@ pub async fn fetch_form(
 /// List the AcroForm fields of a pulled form.
 pub async fn form_fields(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<Value> {
     let form = get_form(pool, company_id, id).await?.ok_or(AppError::NotFound)?;
-    run_pdfform(&["list", &form.file_path]).map_err(AppError::BadRequest)
+    run_taxpdf(&["list", &form.file_path]).map_err(AppError::BadRequest)
 }
 
 /// Fill fields into the form PDF (in place, preserving the original download as
@@ -524,11 +592,11 @@ pub async fn fill_form(
     std::fs::write(&tmp, serde_json::to_vec(values).unwrap_or_default())
         .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
     let out_path = format!("{}.tmp.pdf", form.file_path);
-    let res = run_pdfform(&[
+    let res = run_taxpdf(&[
         "fill",
         &form.file_path,
-        &out_path,
         tmp.to_str().unwrap_or_default(),
+        &out_path,
     ])
     .map_err(AppError::BadRequest)?;
     let _ = std::fs::remove_file(&tmp);
