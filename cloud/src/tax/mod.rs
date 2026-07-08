@@ -618,6 +618,49 @@ pub async fn fill_form(
     Ok(res)
 }
 
+/// Generate a supporting-statement / attachment PDF and file it on the entity's
+/// return. `spec` is the taxpdf `statement` spec
+/// ({title, subtitle?, heading?, items?:[{label,amount}], total?:{label,amount}, paragraphs?}).
+/// This is how the agent adds things a blank IRS form can't hold inline — e.g. the
+/// Form 1120-S line-20 "Other deductions" itemization. Returns the new form id.
+pub async fn add_attachment(
+    pool: &PgPool,
+    company_id: Uuid,
+    year: i32,
+    title: &str,
+    spec: &Value,
+) -> AppResult<Uuid> {
+    let dir = forms_dir().join(company_id.to_string());
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    let id = Uuid::new_v4();
+    let out = dir.join(format!("attachment-{year}-{id}.pdf"));
+    let out_str = out.to_string_lossy().to_string();
+    let spec_path = std::env::temp_dir().join(format!("stmt-{id}.json"));
+    std::fs::write(&spec_path, serde_json::to_vec(spec).unwrap_or_default())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    run_taxpdf(&["statement", spec_path.to_str().unwrap_or_default(), &out_str])
+        .map_err(AppError::BadRequest)?;
+    let _ = std::fs::remove_file(&spec_path);
+
+    let mut conn = pool.acquire().await?;
+    let mut tx = sqlx::Acquire::begin(&mut conn).await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query(
+        "INSERT INTO tax_forms (id, company_id, year, form_code, title, status, file_path, fields, created_at, updated_at)
+         VALUES ($1, $2, $3, 'attachment', $4, 'filled', $5, $6::jsonb, now(), now())",
+    )
+    .bind(id)
+    .bind(company_id)
+    .bind(year)
+    .bind(title)
+    .bind(&out_str)
+    .bind(spec)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
 /// Mail a form via Lob. HARD GATE: the form must be user-approved in the UI.
 pub async fn mail_form(
     pool: &PgPool,

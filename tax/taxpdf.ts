@@ -1,6 +1,8 @@
 // Single PDF helper for tax forms.
 //   fill <in.pdf> <spec.json> <out.pdf>   spec: {amounts:{f:n}, text:{f:s}, check:[f], select:[{field,state}]}
 //   dump <in.pdf>                         -> "T\t<field>\t<value>" and "C\t<checked box>"
+//   statement <spec.json> <out.pdf>       create a supporting-statement/attachment PDF
+//       spec: {title, subtitle?, heading?, items?:[{label,amount}], total?:{label,amount}, paragraphs?:[str]}
 import { PDFDocument, PDFName, StandardFonts } from "npm:pdf-lib@1.17.1";
 
 export function fmtAmount(n: number): string {
@@ -10,6 +12,41 @@ export function fmtAmount(n: number): string {
 }
 
 const [cmd, inPdf, a2, a3] = Deno.args;
+
+// `statement` builds a brand-new PDF (no input form to load) — handle before the load.
+if (cmd === "statement") {
+  const spec = JSON.parse(await Deno.readTextFile(inPdf)); // inPdf position = spec path
+  const sdoc = await PDFDocument.create();
+  const font = await sdoc.embedFont(StandardFonts.Courier);
+  const bold = await sdoc.embedFont(StandardFonts.CourierBold);
+  let page = sdoc.addPage([612, 792]);
+  let y = 740;
+  const line = (text: string, f = font, size = 11) => {
+    if (y < 60) { page = sdoc.addPage([612, 792]); y = 740; }
+    page.drawText(text, { x: 60, y, size, font: f });
+    y -= size + 5;
+  };
+  line(spec.title ?? "Supporting Statement", bold, 13);
+  if (spec.subtitle) line(spec.subtitle);
+  y -= 8;
+  if (spec.heading) { line(spec.heading, bold); y -= 2; }
+  for (const it of spec.items ?? []) {
+    const label = String(it.label);
+    const amt = fmtAmount(it.amount);
+    const dots = ".".repeat(Math.max(2, 52 - label.length - amt.length));
+    line(`  ${label} ${dots} ${amt}`);
+  }
+  if (spec.total) {
+    const amt = fmtAmount(spec.total.amount);
+    line("  " + "-".repeat(50));
+    line(`  ${spec.total.label}  ${amt}`, bold);
+  }
+  for (const p of spec.paragraphs ?? []) { y -= 6; line(String(p)); }
+  await Deno.writeFile(a2, await sdoc.save());
+  console.log(JSON.stringify({ ok: true, pages: sdoc.getPageCount(), out: a2 }));
+  Deno.exit(0);
+}
+
 const doc = await PDFDocument.load(await Deno.readFile(inPdf));
 const form = doc.getForm();
 

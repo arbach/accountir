@@ -237,6 +237,19 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": {"type": "object", "properties": {"entity_key": {"type": "string"}, "year": {"type": "integer"}}, "required": ["entity_key", "year"]}
         }),
         json!({
+            "name": "add_tax_attachment",
+            "description": "Add a supporting statement / attachment PDF to a return — for anything a blank IRS form can't hold inline, like the Form 1120-S line-20 'Other deductions' itemization. Generates a clean statement PDF and files it under the entity's tax forms (appears in list_tax_forms). Provide a title, optional subtitle/heading, and either itemized lines (label + amount, with an optional total) or freeform paragraphs.",
+            "input_schema": {"type": "object", "properties": {
+                "year": {"type": "integer"},
+                "title": {"type": "string", "description": "e.g. 'Form 1120-S Line 20 - Other Deductions'"},
+                "subtitle": {"type": "string", "description": "e.g. entity name + EIN + tax year"},
+                "heading": {"type": "string"},
+                "items": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "amount": {"type": "number"}}, "required": ["label", "amount"]}},
+                "total": {"type": "object", "properties": {"label": {"type": "string"}, "amount": {"type": "number"}}},
+                "paragraphs": {"type": "array", "items": {"type": "string"}}
+            }, "required": ["year", "title"]}
+        }),
+        json!({
             "name": "create_report",
             "description": "Generate a saved report document that appears under Reports → Tax Documents and can be saved as PDF. Use type 'tax_package' to complete the full year-end tax documents (income statement + balance sheet + cash flow + trial balance for a year). Returns the document URL — navigate the user there afterwards.",
             "input_schema": {
@@ -352,6 +365,7 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "fill_tax_form" => fill_tax_form_tool(ctx, input).await,
         "review_tax_form" => review_tax_form_tool(ctx, input).await,
         "prepare_tax_return" => prepare_tax_return_tool(ctx, input).await,
+        "add_tax_attachment" => add_tax_attachment_tool(ctx, input).await,
         "list_tax_forms" => list_tax_forms_tool(ctx).await,
         "mail_tax_form" => mail_tax_form_tool(ctx, input).await,
         "void_entry" => void_entry_tool(ctx, input, false).await,
@@ -883,6 +897,25 @@ async fn prepare_tax_return_tool(ctx: &ToolContext<'_>, input: &Value) -> Value 
         Ok(forms) => json!({
             "ok": true, "forms": forms,
             "next": "tell the user to review each form's PDF on /app/tax and Approve when satisfied",
+        }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+async fn add_tax_attachment_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let year = input.get("year").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let Some(title) = input.get("title").and_then(|v| v.as_str()) else {
+        return json!({ "error": "title required" });
+    };
+    if year < 2000 {
+        return json!({ "error": "a valid tax year is required" });
+    }
+    // the input IS the taxpdf `statement` spec (title/subtitle/heading/items/total/paragraphs)
+    match crate::tax::add_attachment(ctx.pool, ctx.company_id, year, title, input).await {
+        Ok(id) => json!({
+            "ok": true, "form_id": id,
+            "review_url": format!("/app/tax/forms/{id}/pdf"),
+            "next": "the attachment is filed under this year's tax forms; tell the user to review it on /app/tax",
         }),
         Err(e) => json!({ "error": format!("{e}") }),
     }
