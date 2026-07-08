@@ -323,8 +323,13 @@ fn signature_anchor(form_code: &str) -> SignAnchor {
     if form_code.starts_with("f1040") || form_code == "il1040" {
         return SignAnchor { page: 1, x: 74.0, y: 126.0, w: 145.0, date_x: 312.0, date_y: 130.0 };
     }
-    // Business returns (1120-S, 1120, 1065, IL variants) sign on the "Signature
-    // of officer" line near the bottom of page 1.
+    // IL-1120-ST signs in the Step 11 "Sign here" block on page 3 (index 2),
+    // not page 1 — calibrated to the "Signature of authorized officer" line.
+    if form_code == "il1120st" {
+        return SignAnchor { page: 2, x: 55.0, y: 140.0, w: 150.0, date_x: 300.0, date_y: 140.0 };
+    }
+    // Federal business returns (1120-S, 1120, 1065) sign on the "Signature of
+    // officer" line near the bottom of page 1.
     if form_code.starts_with("f1120")
         || form_code.starts_with("f1065")
         || form_code.starts_with("il1120")
