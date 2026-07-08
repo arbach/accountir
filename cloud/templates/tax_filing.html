@@ -143,7 +143,7 @@
     <tbody>
     {% for f in forms %}
       <tr>
-        <td><a href="/app/tax/forms/{{ f.id }}/pdf" target="_blank">{{ f.title }}</a></td>
+        <td><a href="/app/tax/forms/{{ f.id }}/editor" title="Open the editor">{{ f.title }}</a></td>
         <td>{{ f.year }}</td>
         <td><span class="badge">{{ f.status }}</span></td>
         <td class="muted" style="font-size:12px;">
@@ -152,7 +152,8 @@
           {% else %}—{% endif %}
         </td>
         <td>
-          <a href="/app/tax/forms/{{ f.id }}/pdf" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" target="_blank">View PDF</a>
+          <a href="/app/tax/forms/{{ f.id }}/editor" class="btn btn-secondary" style="padding:2px 10px; font-size:12px;">✎ Edit</a>
+          <a href="/app/tax/forms/{{ f.id }}/pdf" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" target="_blank">PDF</a>
           {% if f.status.as_str() == "filled" %}
           <form method="post" action="/app/tax/forms/{{ f.id }}/approve" style="display:inline;" onsubmit="return confirm('Approve this form for mailing? Review the PDF first.')">
             <button class="btn btn-primary" style="padding:2px 10px; font-size:12px;">Approve</button>

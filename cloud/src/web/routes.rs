@@ -94,6 +94,11 @@ pub fn router() -> Router<AppState> {
         .route("/app/tax/forms/{id}/approve", post(tax_form_approve))
         .route("/app/tax/forms/{id}/delete", post(tax_form_delete))
         .route("/app/tax/sign-all", post(tax_sign_all))
+        .route("/app/tax/forms/{id}/editor", get(tax_form_editor))
+        .route("/app/tax/forms/{id}/state", get(tax_form_state))
+        .route("/app/tax/forms/{id}/page/{n}", get(tax_form_page))
+        .route("/app/tax/forms/{id}/fields", post(tax_form_save_fields))
+        .route("/app/tax/forms/{id}/annotations", post(tax_form_save_annotations))
         .route("/app/reports/tax-documents", get(tax_documents))
         .route("/app/reports/tax-documents/generate", post(tax_documents_generate))
         .route("/app/reports/tax-documents/print-all", get(tax_documents_print_all))
@@ -3663,6 +3668,137 @@ async fn tax_sign_all(State(state): State<AppState>, jar: CookieJar) -> Response
         }
     }
     Redirect::to("/app/tax").into_response()
+}
+
+// --- In-browser PDF editor (form fields T1 + annotations T2) ----------------
+
+#[derive(Template)]
+#[template(path = "tax_editor.html")]
+struct TaxEditorTpl {
+    user_email: Option<String>,
+    flash: Option<String>,
+    flash_kind: Option<String>,
+    nav: NavCtx,
+    form_id: String,
+    form_title: String,
+    has_signature: bool,
+}
+
+/// Write the current user's signature to a temp PNG for stamping; caller removes it.
+async fn user_sig_tmp(state: &AppState, user_id: Uuid) -> Option<String> {
+    let (bytes, _) = crate::signature::get_image(&state.pool, user_id).await.ok()??;
+    let p = std::env::temp_dir().join(format!("edsig-{}.png", Uuid::new_v4()));
+    std::fs::write(&p, &bytes).ok()?;
+    Some(p.to_string_lossy().into_owned())
+}
+
+async fn editor_ctx(state: &AppState, jar: &CookieJar) -> Result<(AuthenticatedUser, Uuid), Response> {
+    let user = require_user(state, jar).await?;
+    let company_id = active_company(state, jar, user.id).await.ok_or_else(forbidden)?;
+    Ok((user, company_id))
+}
+
+async fn tax_form_editor(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let (user, company_id) = match editor_ctx(&state, &jar).await { Ok(v) => v, Err(r) => return r };
+    let Ok(fid) = Uuid::parse_str(&id) else {
+        return (StatusCode::BAD_REQUEST, "bad form id").into_response();
+    };
+    let title = crate::tax::get_form(&state.pool, company_id, fid)
+        .await
+        .ok()
+        .flatten()
+        .map(|f| f.title)
+        .unwrap_or_else(|| "Tax form".to_string());
+    let has_signature = crate::signature::has_signature(&state.pool, user.id).await;
+    let nav = build_nav(&state, &jar, user.id).await;
+    render(TaxEditorTpl {
+        user_email: Some(user.email),
+        flash: None,
+        flash_kind: None,
+        nav,
+        form_id: id,
+        form_title: title,
+        has_signature,
+    })
+}
+
+async fn tax_form_state(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let (_user, company_id) = match editor_ctx(&state, &jar).await { Ok(v) => v, Err(r) => return r };
+    let Ok(fid) = Uuid::parse_str(&id) else {
+        return (StatusCode::BAD_REQUEST, "bad form id").into_response();
+    };
+    match crate::tax::editor_state(&state.pool, company_id, fid).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn tax_form_page(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path((id, n)): axum::extract::Path<(String, usize)>,
+) -> Response {
+    let (_user, company_id) = match editor_ctx(&state, &jar).await { Ok(v) => v, Err(r) => return r };
+    let Ok(fid) = Uuid::parse_str(&id) else {
+        return (StatusCode::BAD_REQUEST, "bad form id").into_response();
+    };
+    match crate::tax::render_page_png(&state.pool, company_id, fid, n, 150).await {
+        Ok(bytes) => (
+            [
+                (axum::http::header::CONTENT_TYPE, "image/png".to_string()),
+                (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn tax_form_save_fields(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(values): Json<serde_json::Value>,
+) -> Response {
+    let (user, company_id) = match editor_ctx(&state, &jar).await { Ok(v) => v, Err(r) => return r };
+    let Ok(fid) = Uuid::parse_str(&id) else {
+        return (StatusCode::BAD_REQUEST, "bad form id").into_response();
+    };
+    let sig = user_sig_tmp(&state, user.id).await;
+    let res = crate::tax::save_fields(&state.pool, company_id, fid, &values, sig.as_deref()).await;
+    if let Some(p) = &sig { let _ = std::fs::remove_file(p); }
+    match res {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn tax_form_save_annotations(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(annotations): Json<serde_json::Value>,
+) -> Response {
+    let (user, company_id) = match editor_ctx(&state, &jar).await { Ok(v) => v, Err(r) => return r };
+    let Ok(fid) = Uuid::parse_str(&id) else {
+        return (StatusCode::BAD_REQUEST, "bad form id").into_response();
+    };
+    let sig = user_sig_tmp(&state, user.id).await;
+    let res = crate::tax::save_annotations(&state.pool, company_id, fid, &annotations, sig.as_deref()).await;
+    if let Some(p) = &sig { let _ = std::fs::remove_file(p); }
+    match res {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
 }
 
 async fn tax_form_delete(

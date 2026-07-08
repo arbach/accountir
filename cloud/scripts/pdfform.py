@@ -2,17 +2,18 @@
 """PDF form helper for accountir tax filing.
 
 Usage:
-  pdfform.py list <pdf>                 -> JSON {fields: [{name, type, value, states}]}
-  pdfform.py fill <src> <dst> <json>    -> fills AcroForm fields from a JSON object
-                                           {name: value}; checkbox values use the
-                                           field's "on" state or true/false.
-  pdfform.py text2png <out.png> <json>  -> render a typed signature to a tight,
-                                           transparent PNG. json: {text, font, height?}
-                                           font is a key under FONTS_DIR (e.g. GreatVibes).
-  pdfform.py stamp <src> <dst> <json>   -> overlay signature image(s) + text onto pages.
-                                           json: {stamps:[{page,x,y,w,image}],
-                                                  texts:[{page,x,y,text,size?}]}
-                                           coordinates are PDF points, origin bottom-left.
+  pdfform.py list <pdf>                 -> JSON {pages, sizes:[[w,h]…],
+                                           fields:[{name,type,value,states,page,rect}]}
+                                           rect = [xf,yf,wf,hf] fractions of the page,
+                                           top-left origin (for positioning web overlays).
+  pdfform.py fill <src> <dst> <json>    -> fills AcroForm fields from {name: value}.
+  pdfform.py text2png <out.png> <json>  -> render a typed signature to a transparent PNG.
+  pdfform.py stamp <src> <dst> <json>   -> overlay images / text / rectangles onto pages.
+       json: {stamps:[{page, image, x,y,w  | xf,yf,wf}],
+              texts:[{page, text, size?, color?, x,y | xf,yf}],
+              rects:[{page, xf,yf,wf,hf, color:[r,g,b], opacity?}]}
+       Absolute coords (x,y,w) are PDF points, origin bottom-left.
+       Fractional coords (xf,yf,wf,hf) are 0..1 of the page, origin TOP-left.
 """
 import json
 import os
@@ -24,7 +25,6 @@ FONTS_DIR = os.environ.get("FONTS_DIR", "/usr/local/lib/accountir/fonts")
 
 
 def font_path(key):
-    # Sanitize: only a bare font key, mapped to <FONTS_DIR>/<key>.ttf
     safe = "".join(c for c in (key or "") if c.isalnum())
     p = os.path.join(FONTS_DIR, safe + ".ttf")
     if not safe or not os.path.exists(p):
@@ -32,20 +32,66 @@ def font_path(key):
     return p
 
 
+def _widget_rects(reader):
+    """Map field name -> (page_index, [xf,yf,wf,hf]) from page widget annotations."""
+    out = {}
+    for pidx, page in enumerate(reader.pages):
+        box = page.mediabox
+        pw, ph = float(box.width), float(box.height)
+        if pw <= 0 or ph <= 0:
+            continue
+        annots = page.get("/Annots")
+        if not annots:
+            continue
+        for a in annots:
+            try:
+                w = a.get_object()
+            except Exception:
+                continue
+            if str(w.get("/Subtype")) != "/Widget":
+                continue
+            # Fully-qualified field name = the /T values from the widget up through
+            # its ancestors joined by '.', matching PdfReader.get_fields() keys.
+            parts, node, depth = [], w, 0
+            while node is not None and depth < 12:
+                t = node.get("/T")
+                if t is not None:
+                    parts.append(str(t))
+                parent = node.get("/Parent")
+                node = parent.get_object() if parent is not None else None
+                depth += 1
+            name = ".".join(reversed(parts))
+            rect = w.get("/Rect")
+            if not name or not rect or name in out:
+                continue
+            llx, lly, urx, ury = [float(v) for v in rect]
+            xf = min(llx, urx) / pw
+            wf = abs(urx - llx) / pw
+            yf = (ph - max(lly, ury)) / ph
+            hf = abs(ury - lly) / ph
+            out[name] = (pidx, [xf, yf, wf, hf])
+    return out
+
+
 def list_fields(path):
     reader = PdfReader(path)
+    rects = _widget_rects(reader)
     out = []
     fields = reader.get_fields() or {}
     for name, f in fields.items():
         ft = str(f.get("/FT", ""))
         states = f.get("/_States_")
+        page, rect = rects.get(name, (None, None))
         out.append({
             "name": name,
             "type": {"/Tx": "text", "/Btn": "checkbox", "/Ch": "choice"}.get(ft, ft),
             "value": str(f.get("/V", "")) if f.get("/V") is not None else "",
             "states": [str(s) for s in states] if states else None,
+            "page": page,
+            "rect": rect,
         })
-    print(json.dumps({"fields": out, "pages": len(reader.pages)}))
+    sizes = [[float(p.mediabox.width), float(p.mediabox.height)] for p in reader.pages]
+    print(json.dumps({"fields": out, "pages": len(reader.pages), "sizes": sizes}))
 
 
 def fill(src, dst, fields_json):
@@ -87,7 +133,6 @@ def text2png(out_path, spec_json):
         raise ValueError("empty signature text")
     height = int(spec.get("height", 160))
     fnt = ImageFont.truetype(font_path(spec.get("font")), height)
-    # Measure with a scratch canvas, then render onto a tight transparent bitmap.
     scratch = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     l, t, r, b = scratch.textbbox((0, 0), text, font=fnt)
     pad = max(8, height // 8)
@@ -105,18 +150,14 @@ def stamp(src, dst, spec_json):
     from reportlab.lib.utils import ImageReader
     with open(spec_json) as fh:
         spec = json.load(fh)
-    stamps = spec.get("stamps", [])
-    texts = spec.get("texts", [])
     reader = PdfReader(src)
     writer = PdfWriter()
     writer.append(reader)
 
-    # Group overlay content by page index.
     pages = {}
-    for s in stamps:
-        pages.setdefault(int(s.get("page", 0)), {"stamps": [], "texts": []})["stamps"].append(s)
-    for t in texts:
-        pages.setdefault(int(t.get("page", 0)), {"stamps": [], "texts": []})["texts"].append(t)
+    for kind in ("stamps", "texts", "rects"):
+        for item in spec.get(kind, []):
+            pages.setdefault(int(item.get("page", 0)), {"stamps": [], "texts": [], "rects": []})[kind].append(item)
 
     applied = 0
     for pidx, content in pages.items():
@@ -127,23 +168,55 @@ def stamp(src, dst, spec_json):
         pw, ph = float(box.width), float(box.height)
         buf = io.BytesIO()
         c = canvas.Canvas(buf, pagesize=(pw, ph))
+
+        # Rectangles first (highlight / redaction) so text/images sit on top.
+        for r in content["rects"]:
+            x = float(r.get("xf", 0)) * pw
+            w = float(r.get("wf", 0)) * pw
+            h = float(r.get("hf", 0)) * ph
+            y = ph - float(r.get("yf", 0)) * ph - h
+            col = r.get("color", [1, 1, 0])
+            c.saveState()
+            try:
+                c.setFillAlpha(float(r.get("opacity", 0.35)))
+            except Exception:
+                pass
+            c.setFillColorRGB(float(col[0]), float(col[1]), float(col[2]))
+            c.rect(x, y, w, h, fill=1, stroke=0)
+            c.restoreState()
+            applied += 1
+
         for s in content["stamps"]:
             img = ImageReader(s["image"])
             iw, ih = img.getSize()
-            w = float(s.get("w", 160))
-            h = w * ih / iw
-            c.drawImage(img, float(s.get("x", 0)), float(s.get("y", 0)),
-                        width=w, height=h, mask="auto")
+            if "xf" in s:
+                w = float(s.get("wf", 0.2)) * pw
+                h = w * ih / iw
+                x = float(s.get("xf", 0)) * pw
+                y = ph - float(s.get("yf", 0)) * ph - h
+            else:
+                w = float(s.get("w", 160))
+                h = w * ih / iw
+                x, y = float(s.get("x", 0)), float(s.get("y", 0))
+            c.drawImage(img, x, y, width=w, height=h, mask="auto")
             applied += 1
+
         for t in content["texts"]:
-            c.setFont("Helvetica", float(t.get("size", 10)))
-            c.setFillColorRGB(0.06, 0.09, 0.16)
-            c.drawString(float(t.get("x", 0)), float(t.get("y", 0)), str(t.get("text", "")))
+            size = float(t.get("size", 11))
+            c.setFont("Helvetica", size)
+            col = t.get("color", [0.06, 0.09, 0.16])
+            c.setFillColorRGB(float(col[0]), float(col[1]), float(col[2]))
+            if "xf" in t:
+                x = float(t.get("xf", 0)) * pw
+                y = ph - float(t.get("yf", 0)) * ph - size
+            else:
+                x, y = float(t.get("x", 0)), float(t.get("y", 0))
+            c.drawString(x, y, str(t.get("text", "")))
             applied += 1
+
         c.save()
         buf.seek(0)
-        overlay = PdfReader(buf).pages[0]
-        page.merge_page(overlay)
+        page.merge_page(PdfReader(buf).pages[0])
 
     with open(dst, "wb") as fh:
         writer.write(fh)
@@ -164,6 +237,6 @@ if __name__ == "__main__":
         else:
             print(json.dumps({"error": "usage: pdfform.py list|fill|text2png|stamp ..."}))
             sys.exit(2)
-    except Exception as e:  # surface as JSON for the Rust caller
+    except Exception as e:
         print(json.dumps({"error": f"{type(e).__name__}: {e}"}))
         sys.exit(1)

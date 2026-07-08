@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ form_title }} · Maven{% endblock %}
+{% block body %}
+<style>
+  .ed-bar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap; padding: 8px 12px; background: var(--surface, #fff);
+    border-bottom: 1px solid var(--border-strong, #ccc); }
+  .ed-tool { padding: 4px 10px; font-size: 13px; border: 1px solid var(--border, #ccc);
+    background: #fff; border-radius: 6px; cursor: pointer; }
+  .ed-tool.on { background: var(--accent, #2563eb); color: #fff; border-color: var(--accent, #2563eb); }
+  .ed-status { margin-left: auto; font-size: 12px; color: var(--muted, #777); }
+  .ed-pages { padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+  .pg { position: relative; width: 100%; max-width: 900px; background-size: 100% 100%;
+    background-repeat: no-repeat; border: 1px solid var(--border, #ddd); box-shadow: 0 1px 6px rgba(0,0,0,.1); }
+  .pg.draw { cursor: crosshair; }
+  .fld { position: absolute; box-sizing: border-box; font-size: 11px; border: 1px solid rgba(37,99,235,.4);
+    background: rgba(37,99,235,.06); padding: 0 2px; }
+  .fld:focus { outline: 2px solid var(--accent, #2563eb); background: #fff; }
+  .anno { position: absolute; box-sizing: border-box; cursor: move; }
+  .anno.sel { outline: 2px dashed var(--accent, #2563eb); }
+  .anno.text { font-size: 12px; color: #0f172a; padding: 1px 3px; min-width: 30px; white-space: pre; background: rgba(255,255,255,.01); }
+  .anno.text:focus { outline: 2px solid var(--accent, #2563eb); background: #fff; }
+  .anno.highlight { background: rgba(255,235,60,.4); }
+  .anno.redact { background: #000; }
+  .anno.signature img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+  .anno .del { position: absolute; top: -9px; right: -9px; width: 18px; height: 18px; line-height: 16px;
+    text-align: center; border-radius: 50%; background: #b91c1c; color: #fff; font-size: 12px; cursor: pointer; display: none; }
+  .anno.sel .del { display: block; }
+</style>
+
+<div class="ed-bar">
+  <a href="/app/tax" class="btn btn-ghost" style="padding:3px 10px; font-size:12px;">← Tax</a>
+  <strong style="font-size:14px;">{{ form_title }}</strong>
+  <span style="width:1px; height:20px; background:var(--border,#ddd);"></span>
+  <button class="ed-tool on" data-tool="select" onclick="setTool('select')">Select</button>
+  <button class="ed-tool" data-tool="text" onclick="setTool('text')">＋ Text</button>
+  <button class="ed-tool" data-tool="highlight" onclick="setTool('highlight')">▮ Highlight</button>
+  <button class="ed-tool" data-tool="redact" onclick="setTool('redact')">▉ Redact</button>
+  <button class="ed-tool" data-tool="signature" onclick="setTool('signature')" title="Place your saved signature">✍ Signature</button>
+  <a href="/app/tax/forms/{{ form_id }}/pdf" target="_blank" class="btn btn-ghost" style="padding:3px 10px; font-size:12px;">Open PDF ↗</a>
+  <span class="ed-status" id="ed-status">Loading…</span>
+</div>
+<div class="ed-pages" id="ed-pages"></div>
+
+<script>
+(function () {
+  const FORM_ID = "{{ form_id }}";
+  const HAS_SIG = {% if has_signature %}true{% else %}false{% endif %};
+  let STATE = null, annos = [], tool = 'select', sel = null;
+  const status = document.getElementById('ed-status');
+  function setStatus(t) { status.textContent = t; }
+
+  window.setTool = function (t) {
+    tool = t;
+    document.querySelectorAll('.ed-tool').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+    document.querySelectorAll('.pg').forEach(p => p.classList.toggle('draw', t !== 'select'));
+  };
+
+  // ---- saving (debounced) ----
+  let fieldTimer = null, pendingFields = {};
+  function saveFieldSoon(name, value) {
+    pendingFields[name] = value;
+    setStatus('Saving…');
+    clearTimeout(fieldTimer);
+    fieldTimer = setTimeout(flushFields, 800);
+  }
+  function flushFields() {
+    const body = pendingFields; pendingFields = {};
+    if (!Object.keys(body).length) return;
+    fetch(`/app/tax/forms/${FORM_ID}/fields`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).then(r => setStatus(r.ok ? 'Saved ✓' : 'Save failed')).catch(() => setStatus('Save failed'));
+  }
+  let annoTimer = null;
+  function saveAnnosSoon() {
+    setStatus('Saving…');
+    clearTimeout(annoTimer);
+    annoTimer = setTimeout(() => {
+      fetch(`/app/tax/forms/${FORM_ID}/annotations`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(annos)
+      }).then(r => setStatus(r.ok ? 'Saved ✓' : 'Save failed')).catch(() => setStatus('Save failed'));
+    }, 700);
+  }
+
+  // ---- build ----
+  fetch(`/app/tax/forms/${FORM_ID}/state`).then(r => r.json()).then(s => {
+    STATE = s; annos = Array.isArray(s.annotations) ? s.annotations : [];
+    build();
+    setStatus('Ready');
+  }).catch(() => setStatus('Could not load form'));
+
+  const pageEls = [];
+  function build() {
+    const wrap = document.getElementById('ed-pages');
+    wrap.innerHTML = '';
+    const sizes = STATE.sizes || [];
+    for (let p = 0; p < STATE.pages; p++) {
+      const sz = sizes[p] || [612, 792];
+      const pg = document.createElement('div');
+      pg.className = 'pg';
+      pg.style.aspectRatio = sz[0] + ' / ' + sz[1];
+      pg.style.backgroundImage = `url(/app/tax/forms/${FORM_ID}/page/${p})`;
+      pg.dataset.page = p;
+      pg.addEventListener('mousedown', pageMouseDown);
+      wrap.appendChild(pg);
+      pageEls[p] = pg;
+    }
+    // Field overlays.
+    (STATE.fields || []).forEach(f => {
+      if (f.page == null || !f.rect) return;
+      const pg = pageEls[f.page]; if (!pg) return;
+      const [xf, yf, wf, hf] = f.rect;
+      let el;
+      if (f.type === 'checkbox') {
+        el = document.createElement('input');
+        el.type = 'checkbox';
+        el.checked = f.value && f.value !== '/Off' && f.value !== 'Off' && f.value !== '';
+        el.addEventListener('change', () => saveFieldSoon(f.name, el.checked));
+      } else {
+        el = document.createElement('input');
+        el.type = 'text';
+        el.value = f.value || '';
+        el.addEventListener('input', () => saveFieldSoon(f.name, el.value));
+      }
+      el.className = 'fld';
+      el.style.left = (xf * 100) + '%'; el.style.top = (yf * 100) + '%';
+      el.style.width = (wf * 100) + '%'; el.style.height = (hf * 100) + '%';
+      el.title = f.name;
+      pg.appendChild(el);
+    });
+    // Annotation overlays.
+    annos.forEach(a => renderAnno(a));
+  }
+
+  function renderAnno(a) {
+    const pg = pageEls[a.page]; if (!pg) return;
+    const el = document.createElement('div');
+    el.className = 'anno ' + a.type;
+    el._a = a; a._el = el;
+    place(el, a);
+    if (a.type === 'text') {
+      el.contentEditable = 'true';
+      el.textContent = a.text || '';
+      el.style.fontSize = ((a.size || 12)) + 'px';
+      el.addEventListener('input', () => { a.text = el.textContent; saveAnnosSoon(); });
+    } else if (a.type === 'signature') {
+      const img = document.createElement('img');
+      img.src = '/app/admin/signature.png';
+      el.appendChild(img);
+    }
+    const del = document.createElement('span');
+    del.className = 'del'; del.textContent = '×';
+    del.addEventListener('mousedown', e => { e.stopPropagation(); removeAnno(a); });
+    el.appendChild(del);
+    el.addEventListener('mousedown', e => annoMouseDown(e, a));
+    pg.appendChild(el);
+  }
+  function place(el, a) {
+    el.style.left = (a.xf * 100) + '%'; el.style.top = (a.yf * 100) + '%';
+    if (a.wf != null) el.style.width = (a.wf * 100) + '%';
+    if (a.hf != null) el.style.height = (a.hf * 100) + '%';
+  }
+  function removeAnno(a) {
+    if (a._el) a._el.remove();
+    annos = annos.filter(x => x !== a);
+    if (sel === a) sel = null;
+    saveAnnosSoon();
+  }
+  function selectAnno(a) {
+    if (sel && sel._el) sel._el.classList.remove('sel');
+    sel = a;
+    if (a && a._el) a._el.classList.add('sel');
+  }
+
+  // ---- placing new annotations ----
+  let drawing = null;
+  function pageMouseDown(e) {
+    if (tool === 'select') { selectAnno(null); return; }
+    const pg = e.currentTarget;
+    const r = pg.getBoundingClientRect();
+    const xf = (e.clientX - r.left) / r.width, yf = (e.clientY - r.top) / r.height;
+    const page = +pg.dataset.page;
+    if (tool === 'text') {
+      const a = { type: 'text', page, xf, yf, text: 'Text', size: 12 };
+      annos.push(a); renderAnno(a); saveAnnosSoon();
+      selectAnno(a); a._el.focus();
+      setTool('select');
+    } else if (tool === 'signature') {
+      if (!HAS_SIG) { alert('Add your signature in Settings first.'); setTool('select'); return; }
+      const a = { type: 'signature', page, xf, yf, wf: 0.18, hf: 0.05 };
+      annos.push(a); renderAnno(a); saveAnnosSoon();
+      selectAnno(a); setTool('select');
+    } else if (tool === 'highlight' || tool === 'redact') {
+      e.preventDefault();
+      drawing = { type: tool, page, x0: xf, y0: yf, pg, r };
+    }
+  }
+  document.addEventListener('mousemove', e => {
+    if (!drawing) return;
+    const xf = Math.min(Math.max((e.clientX - drawing.r.left) / drawing.r.width, 0), 1);
+    const yf = Math.min(Math.max((e.clientY - drawing.r.top) / drawing.r.height, 0), 1);
+    if (!drawing.el) {
+      drawing.a = { type: drawing.type, page: drawing.page, xf: drawing.x0, yf: drawing.y0, wf: 0, hf: 0 };
+      annos.push(drawing.a); renderAnno(drawing.a); drawing.el = drawing.a._el;
+    }
+    const a = drawing.a;
+    a.xf = Math.min(drawing.x0, xf); a.yf = Math.min(drawing.y0, yf);
+    a.wf = Math.abs(xf - drawing.x0); a.hf = Math.abs(yf - drawing.y0);
+    place(drawing.el, a);
+  });
+  document.addEventListener('mouseup', () => {
+    if (drawing) {
+      if (drawing.a && (drawing.a.wf < 0.005 || drawing.a.hf < 0.004)) removeAnno(drawing.a);
+      else saveAnnosSoon();
+      drawing = null; setTool('select');
+    }
+    dragging = null;
+  });
+
+  // ---- dragging existing annotations ----
+  let dragging = null;
+  function annoMouseDown(e, a) {
+    if (tool !== 'select') return;
+    if (a.type === 'text' && document.activeElement === a._el) return; // editing text
+    e.stopPropagation();
+    selectAnno(a);
+    const pr = pageEls[a.page].getBoundingClientRect();
+    dragging = { a, pr, dx: (e.clientX - pr.left) / pr.width - a.xf, dy: (e.clientY - pr.top) / pr.height - a.yf };
+  }
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const a = dragging.a, pr = dragging.pr;
+    a.xf = Math.min(Math.max((e.clientX - pr.left) / pr.width - dragging.dx, 0), 1);
+    a.yf = Math.min(Math.max((e.clientY - pr.top) / pr.height - dragging.dy, 0), 1);
+    place(a._el, a);
+  });
+  document.addEventListener('mouseup', () => { if (dragging) { saveAnnosSoon(); dragging = null; } });
+
+  document.addEventListener('keydown', e => {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && sel && sel.type !== 'text') {
+      e.preventDefault(); removeAnno(sel);
+    }
+  });
+})();
+</script>
+{% endblock %}
