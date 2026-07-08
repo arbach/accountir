@@ -133,6 +133,26 @@
     <a href="/app/admin/settings#signature-card" class="btn btn-secondary" style="font-size:12px; padding:4px 12px;" title="You need a saved signature before you can sign forms">Add your signature to sign →</a>
     {% endif %}
     {% endif %}
+    {% if has_signed && lob_configured && view_step == 7 %}
+    <details style="position:relative; margin:0;">
+      <summary class="btn btn-primary" style="font-size:12px; padding:4px 12px; list-style:none; cursor:pointer;">📮 Mail all signed forms</summary>
+      <div style="position:absolute; right:0; z-index:20; background:#fff; color:#111; border:1px solid #ccc; padding:12px; border-radius:8px; margin-top:6px; box-shadow:0 6px 16px rgba(0,0,0,.18); width:320px; text-align:left;">
+        <form method="post" action="/app/tax/mail-all" onsubmit="return confirm('Mail EVERY signed form to this one address? Federal and state forms normally go to DIFFERENT addresses — only use this when they all go to the same place. Unsigned/unreviewed/unapproved forms are skipped.')">
+          <p class="muted" style="font-size:11px; margin:0 0 8px;">Mails every <b>signed</b> form to this destination. Only signed forms (reviewed &amp; approved &amp; signed) are sent — the rest are skipped.</p>
+          <input name="to_name" placeholder="Recipient (e.g. Illinois Department of Revenue)" required style="width:100%; margin-bottom:4px; font-size:12px; padding:4px;">
+          <input name="to_line1" placeholder="Address line 1 (e.g. PO Box 19048)" required style="width:100%; margin-bottom:4px; font-size:12px; padding:4px;">
+          <input name="to_line2" placeholder="Address line 2 (optional)" style="width:100%; margin-bottom:4px; font-size:12px; padding:4px;">
+          <div style="display:flex; gap:4px; margin-bottom:6px;">
+            <input name="to_city" placeholder="City" required style="flex:2; font-size:12px; padding:4px; min-width:0;">
+            <input name="to_state" placeholder="ST" required maxlength="2" style="width:44px; font-size:12px; padding:4px;">
+            <input name="to_zip" placeholder="ZIP" required style="width:70px; font-size:12px; padding:4px;">
+          </div>
+          <label style="font-size:11px; display:block; margin-bottom:8px;"><input type="checkbox" name="certified" checked> Certified mail (recommended for returns)</label>
+          <button class="btn btn-primary" style="width:100%; font-size:12px;">Mail all signed forms</button>
+        </form>
+      </div>
+    </details>
+    {% endif %}
   </div>
   {% if forms.is_empty() %}
   <p class="muted" style="font-size: 13px;">No forms yet. Ask the AI assistant to start your tax filing — it pulls the right IRS forms and completes them from the ledger.</p>
@@ -158,6 +178,26 @@
           <form method="post" action="/app/tax/forms/{{ f.id }}/approve" style="display:inline;" onsubmit="return confirm('Approve this form for mailing? Review the PDF first.')">
             <button class="btn btn-primary" style="padding:2px 10px; font-size:12px;">Approve</button>
           </form>
+          {% endif %}
+          {% if f.mailable() && lob_configured && view_step == 7 %}
+          <details style="display:inline-block; position:relative;">
+            <summary class="btn btn-primary" style="padding:2px 10px; font-size:12px; list-style:none; cursor:pointer;">📮 Mail</summary>
+            <div style="position:absolute; right:0; z-index:20; background:#fff; color:#111; border:1px solid #ccc; padding:12px; border-radius:8px; margin-top:6px; box-shadow:0 6px 16px rgba(0,0,0,.18); width:300px; text-align:left;">
+              <form method="post" action="/app/tax/forms/{{ f.id }}/mail" onsubmit="return confirm('Mail this form to the address below?')">
+                <p class="muted" style="font-size:11px; margin:0 0 8px;">Verify the correct IRS / state service-center address for this form before mailing.</p>
+                <input name="to_name" placeholder="Recipient" required style="width:100%; margin-bottom:4px; font-size:12px; padding:4px;">
+                <input name="to_line1" placeholder="Address line 1" required style="width:100%; margin-bottom:4px; font-size:12px; padding:4px;">
+                <input name="to_line2" placeholder="Address line 2 (optional)" style="width:100%; margin-bottom:4px; font-size:12px; padding:4px;">
+                <div style="display:flex; gap:4px; margin-bottom:6px;">
+                  <input name="to_city" placeholder="City" required style="flex:2; font-size:12px; padding:4px; min-width:0;">
+                  <input name="to_state" placeholder="ST" required maxlength="2" style="width:44px; font-size:12px; padding:4px;">
+                  <input name="to_zip" placeholder="ZIP" required style="width:70px; font-size:12px; padding:4px;">
+                </div>
+                <label style="font-size:11px; display:block; margin-bottom:8px;"><input type="checkbox" name="certified" checked> Certified mail</label>
+                <button class="btn btn-primary" style="width:100%; font-size:12px;">Mail this form</button>
+              </form>
+            </div>
+          </details>
           {% endif %}
           {% if f.status.as_str() != "mailed" %}
           <form method="post" action="/app/tax/forms/{{ f.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this form?')">

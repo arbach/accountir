@@ -92,6 +92,8 @@ pub fn router() -> Router<AppState> {
         )
         .route("/app/tax/forms/{id}/pdf", get(tax_form_pdf))
         .route("/app/tax/forms/{id}/approve", post(tax_form_approve))
+        .route("/app/tax/forms/{id}/mail", post(tax_form_mail))
+        .route("/app/tax/mail-all", post(tax_mail_all))
         .route("/app/tax/forms/{id}/delete", post(tax_form_delete))
         .route("/app/tax/sign-all", post(tax_sign_all))
         .route("/app/tax/forms/{id}/editor", get(tax_form_editor))
@@ -3229,6 +3231,8 @@ struct TaxFilingTpl {
     lob_configured: bool,
     /// Any form awaiting signature (status = approved).
     has_approved: bool,
+    /// Any signed form ready to mail (drives the "Mail all" button).
+    has_signed: bool,
     /// The owner has a signature saved in Settings.
     has_signature: bool,
 }
@@ -3409,6 +3413,7 @@ async fn tax_filing(
         profile_state,
         profile_zip,
         has_approved: forms.iter().any(|f| f.status == "approved"),
+        has_signed: forms.iter().any(|f| f.mailable()),
         has_signature: crate::signature::has_signature(&state.pool, user.id).await,
         forms,
         lob_configured: crate::tax::lob::configured(),
@@ -3636,6 +3641,105 @@ async fn tax_form_approve(
         let _ = crate::tax::approve_form(&state.pool, company_id, form_id).await;
     }
     Redirect::to("/app/tax").into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct MailForm {
+    to_name: String,
+    to_line1: String,
+    #[serde(default)]
+    to_line2: String,
+    to_city: String,
+    to_state: String,
+    to_zip: String,
+    #[serde(default)]
+    certified: Option<String>,
+}
+
+impl MailForm {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "name": self.to_name.trim(),
+            "address_line1": self.to_line1.trim(),
+            "address_line2": self.to_line2.trim(),
+            "address_city": self.to_city.trim(),
+            "address_state": self.to_state.trim(),
+            "address_zip": self.to_zip.trim(),
+        })
+    }
+    fn valid(&self) -> bool {
+        !self.to_name.trim().is_empty()
+            && !self.to_line1.trim().is_empty()
+            && !self.to_city.trim().is_empty()
+            && !self.to_state.trim().is_empty()
+            && !self.to_zip.trim().is_empty()
+    }
+}
+
+/// Mail one signed form. `mail_form` HARD-GATES on status == "signed" (which is
+/// only reachable after the step-4 review + user approval + signature), so an
+/// unreviewed/unapproved/unsigned form can never be mailed here.
+async fn tax_form_mail(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Form(req): Form<MailForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let _ = user;
+    if !req.valid() {
+        return Redirect::to("/app/tax?merr=1").into_response();
+    }
+    let Ok(form_id) = Uuid::parse_str(&id) else {
+        return Redirect::to("/app/tax").into_response();
+    };
+    match crate::tax::mail_form(&state.pool, company_id, form_id, &req.to_json(), req.certified.is_some()).await {
+        Ok(_) => Redirect::to("/app/tax?mailed=1").into_response(),
+        Err(_) => Redirect::to("/app/tax?merr=1").into_response(),
+    }
+}
+
+/// Mail EVERY mailable (signed) form to one destination. Non-signed forms are
+/// skipped by the `mailable()` filter, and `mail_form` re-checks the gate, so
+/// nothing unsigned/unreviewed/unapproved goes out.
+async fn tax_mail_all(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Form(req): Form<MailForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let _ = user;
+    if !req.valid() {
+        return Redirect::to("/app/tax?merr=1").into_response();
+    }
+    let to = req.to_json();
+    let certified = req.certified.is_some();
+    let forms = crate::tax::list_forms(&state.pool, company_id).await.unwrap_or_default();
+    let (mut mailed, mut failed) = (0u32, 0u32);
+    for f in forms.iter().filter(|f| f.mailable()) {
+        match crate::tax::mail_form(&state.pool, company_id, f.id, &to, certified).await {
+            Ok(_) => mailed += 1,
+            Err(e) => {
+                failed += 1;
+                tracing::warn!(form = %f.id, error = %e, "mail-all: form failed");
+            }
+        }
+    }
+    Redirect::to(&format!("/app/tax?mailed={mailed}&failed={failed}")).into_response()
 }
 
 /// Step 6 · Sign: stamp the owner's signature onto every approved form.

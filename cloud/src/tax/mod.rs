@@ -166,6 +166,13 @@ impl TaxFormRow {
             _ => String::new(),
         }
     }
+    /// A form may be mailed ONLY once it is signed — which it can only become
+    /// after passing the step-4 review (approve gate) and being user-approved
+    /// then signed. So `signed` transitively guarantees reviewed + approved +
+    /// signed. Attachments (no signature line) ride along with their parent.
+    pub fn mailable(&self) -> bool {
+        self.status == "signed"
+    }
 }
 
 fn form_row(r: sqlx::postgres::PgRow) -> TaxFormRow {
