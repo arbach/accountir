@@ -417,6 +417,27 @@ fn run_taxpdf(args: &[&str]) -> Result<Value, String> {
     Ok(v)
 }
 
+fn pdfform_bin() -> String {
+    std::env::var("PDFFORM_BIN").unwrap_or_else(|_| "/usr/local/lib/accountir/pdfform.py".to_string())
+}
+
+/// Run the pdfform.py helper (list with field rects | fill | stamp with
+/// fractional coords + highlight/redact) — used by the in-browser editor.
+fn run_pdfform(args: &[&str]) -> Result<Value, String> {
+    let out = std::process::Command::new(pdfform_bin())
+        .env("FONTS_DIR", std::env::var("FONTS_DIR").unwrap_or_else(|_| "/usr/local/lib/accountir/fonts".to_string()))
+        .args(args)
+        .output()
+        .map_err(|e| format!("pdfform helper failed to start: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: Value = serde_json::from_str(stdout.trim())
+        .map_err(|_| format!("pdfform helper bad output: {}", stdout.chars().take(200).collect::<String>()))?;
+    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+        return Err(err.to_string());
+    }
+    Ok(v)
+}
+
 // ─── OpenTax engine of record (deterministic compute) ──────────────────────────
 
 /// Result of a deterministic OpenTax compute for one entity-year.
@@ -578,6 +599,31 @@ pub async fn form_fields(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult
 
 /// Fill fields into the form PDF (in place, preserving the original download as
 /// the fill source each time would lose prior values — we fill cumulatively).
+/// Normalize a fill request into the taxpdf spec `{amounts, text, check, select}`.
+/// The agent passes a FLAT `{field: value}` map (per the fill_tax_form tool); this
+/// routes numbers → amounts (comma-formatted), booleans → checkboxes, strings →
+/// text. An already-structured spec (has any of those keys) passes through
+/// unchanged, so internal callers that build the spec directly still work.
+fn to_fill_spec(values: &Value) -> Value {
+    let Some(obj) = values.as_object() else { return values.clone() };
+    if ["amounts", "text", "check", "select"].iter().any(|k| obj.contains_key(*k)) {
+        return values.clone();
+    }
+    let mut amounts = serde_json::Map::new();
+    let mut text = serde_json::Map::new();
+    let mut check: Vec<Value> = Vec::new();
+    for (k, v) in obj {
+        match v {
+            Value::Number(_) => { amounts.insert(k.clone(), v.clone()); }
+            Value::Bool(b) => { if *b { check.push(Value::String(k.clone())); } }
+            Value::String(s) => { text.insert(k.clone(), Value::String(s.clone())); }
+            Value::Null => {}
+            other => { text.insert(k.clone(), Value::String(other.to_string())); }
+        }
+    }
+    json!({ "amounts": amounts, "text": text, "check": check })
+}
+
 pub async fn fill_form(
     pool: &PgPool,
     company_id: Uuid,
@@ -588,8 +634,9 @@ pub async fn fill_form(
     if form.status == "mailed" {
         return Err(AppError::BadRequest("form already mailed; pull a fresh copy".into()));
     }
+    let spec = to_fill_spec(values);
     let tmp = std::env::temp_dir().join(format!("taxfill-{id}.json"));
-    std::fs::write(&tmp, serde_json::to_vec(values).unwrap_or_default())
+    std::fs::write(&tmp, serde_json::to_vec(&spec).unwrap_or_default())
         .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
     let out_path = format!("{}.tmp.pdf", form.file_path);
     let res = run_taxpdf(&[
@@ -616,6 +663,220 @@ pub async fn fill_form(
     .await?;
     tx.commit().await?;
     Ok(res)
+}
+
+// ---------------------------------------------------------------------------
+// In-browser editor: field values + overlay annotations, composed onto the PDF.
+// The live file_path = a pristine `.base` snapshot + AcroForm fills + stamped
+// annotations, recomposed on every save so edits stay reversible.
+// ---------------------------------------------------------------------------
+
+fn base_path(file_path: &str) -> String {
+    format!("{file_path}.base")
+}
+
+/// Snapshot the current PDF as the annotation-free `.base` once, and return it.
+fn ensure_base(file_path: &str) -> AppResult<String> {
+    let base = base_path(file_path);
+    if !std::path::Path::new(&base).exists() {
+        std::fs::copy(file_path, &base).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    }
+    Ok(base)
+}
+
+/// Convert stored annotations into a pdfform `stamp` spec. `sig_png` is a path to
+/// the owner's signature image, used for any "signature" annotations.
+fn annotations_to_spec(annotations: &Value, sig_png: Option<&str>) -> Value {
+    let mut stamps = Vec::new();
+    let mut texts = Vec::new();
+    let mut rects = Vec::new();
+    for a in annotations.as_array().map(|v| v.as_slice()).unwrap_or(&[]) {
+        let page = a.get("page").and_then(|v| v.as_i64()).unwrap_or(0);
+        let xf = a.get("xf").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let yf = a.get("yf").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        match a.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+            "text" => texts.push(json!({
+                "page": page, "xf": xf, "yf": yf,
+                "text": a.get("text").and_then(|v| v.as_str()).unwrap_or(""),
+                "size": a.get("size").and_then(|v| v.as_f64()).unwrap_or(12.0),
+            })),
+            "highlight" => rects.push(json!({
+                "page": page, "xf": xf, "yf": yf,
+                "wf": a.get("wf").and_then(|v| v.as_f64()).unwrap_or(0.1),
+                "hf": a.get("hf").and_then(|v| v.as_f64()).unwrap_or(0.02),
+                "color": [1.0, 0.9, 0.2], "opacity": 0.35,
+            })),
+            "redact" => rects.push(json!({
+                "page": page, "xf": xf, "yf": yf,
+                "wf": a.get("wf").and_then(|v| v.as_f64()).unwrap_or(0.1),
+                "hf": a.get("hf").and_then(|v| v.as_f64()).unwrap_or(0.02),
+                "color": [0.0, 0.0, 0.0], "opacity": 1.0,
+            })),
+            "signature" => {
+                if let Some(p) = sig_png {
+                    stamps.push(json!({
+                        "page": page, "xf": xf, "yf": yf,
+                        "wf": a.get("wf").and_then(|v| v.as_f64()).unwrap_or(0.18),
+                        "image": p,
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+    json!({ "stamps": stamps, "texts": texts, "rects": rects })
+}
+
+/// Rebuild file_path from the base + the given annotations.
+fn compose(file_path: &str, annotations: &Value, sig_png: Option<&str>) -> AppResult<()> {
+    let base = ensure_base(file_path)?;
+    let is_empty = annotations.as_array().map(|a| a.is_empty()).unwrap_or(true);
+    if is_empty {
+        std::fs::copy(&base, file_path).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+        return Ok(());
+    }
+    let spec = annotations_to_spec(annotations, sig_png);
+    let spec_path = std::env::temp_dir().join(format!("anno-{}.json", Uuid::new_v4()));
+    std::fs::write(&spec_path, serde_json::to_vec(&spec).unwrap_or_default())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    let out = format!("{file_path}.compose.pdf");
+    let res = run_pdfform(&["stamp", &base, &out, spec_path.to_str().unwrap_or_default()]);
+    let _ = std::fs::remove_file(&spec_path);
+    res.map_err(AppError::BadRequest)?;
+    std::fs::rename(&out, file_path).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    Ok(())
+}
+
+/// Get an editable form's fields (with positions) and its saved annotations.
+pub async fn editor_state(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<Value> {
+    let form = get_form(pool, company_id, id).await?.ok_or(AppError::NotFound)?;
+    let fields = run_pdfform(&["list", &form.file_path]).map_err(AppError::BadRequest)?;
+    let annotations = get_annotations(pool, company_id, id).await?;
+    Ok(json!({
+        "id": id,
+        "title": form.title,
+        "pages": fields.get("pages").cloned().unwrap_or(json!(1)),
+        "sizes": fields.get("sizes").cloned().unwrap_or(json!([])),
+        "fields": fields.get("fields").cloned().unwrap_or(json!([])),
+        "annotations": annotations,
+        "status": form.status,
+    }))
+}
+
+pub async fn get_annotations(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<Value> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = sqlx::Acquire::begin(&mut conn).await?;
+    set_tenant(&mut tx, company_id).await?;
+    let row = sqlx::query("SELECT annotations FROM tax_forms WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(row.and_then(|r| r.try_get::<Value, _>(0).ok()).unwrap_or_else(|| json!([])))
+}
+
+/// Save edited AcroForm field values: fill them into the base, then recompose.
+pub async fn save_fields(
+    pool: &PgPool,
+    company_id: Uuid,
+    id: Uuid,
+    values: &Value,
+    sig_png: Option<&str>,
+) -> AppResult<()> {
+    let form = get_form(pool, company_id, id).await?.ok_or(AppError::NotFound)?;
+    if form.status == "mailed" {
+        return Err(AppError::BadRequest("form already mailed".into()));
+    }
+    let base = ensure_base(&form.file_path)?;
+    // Fill the field values into the base (in place, cumulative).
+    let tmp = std::env::temp_dir().join(format!("fill-{id}.json"));
+    std::fs::write(&tmp, serde_json::to_vec(values).unwrap_or_default())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    let out = format!("{base}.tmp");
+    let res = run_pdfform(&["fill", &base, &out, tmp.to_str().unwrap_or_default()]);
+    let _ = std::fs::remove_file(&tmp);
+    res.map_err(AppError::BadRequest)?;
+    std::fs::rename(&out, &base).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+
+    let annotations = get_annotations(pool, company_id, id).await?;
+    compose(&form.file_path, &annotations, sig_png)?;
+
+    let mut conn = pool.acquire().await?;
+    let mut tx = sqlx::Acquire::begin(&mut conn).await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query(
+        "UPDATE tax_forms
+            SET fields = COALESCE(fields, '{}'::jsonb) || $2::jsonb,
+                status = CASE WHEN status IN ('pulled','fetched') THEN 'filled' ELSE status END,
+                updated_at = now()
+          WHERE id = $1",
+    )
+    .bind(id)
+    .bind(values)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Save overlay annotations and recompose the PDF.
+pub async fn save_annotations(
+    pool: &PgPool,
+    company_id: Uuid,
+    id: Uuid,
+    annotations: &Value,
+    sig_png: Option<&str>,
+) -> AppResult<()> {
+    let form = get_form(pool, company_id, id).await?.ok_or(AppError::NotFound)?;
+    if form.status == "mailed" {
+        return Err(AppError::BadRequest("form already mailed".into()));
+    }
+    compose(&form.file_path, annotations, sig_png)?;
+    let mut conn = pool.acquire().await?;
+    let mut tx = sqlx::Acquire::begin(&mut conn).await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query("UPDATE tax_forms SET annotations = $2::jsonb, updated_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(annotations)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Render one page of the form to a PNG (for the editor background).
+pub async fn render_page_png(
+    pool: &PgPool,
+    company_id: Uuid,
+    id: Uuid,
+    page: usize,
+    dpi: u32,
+) -> AppResult<Vec<u8>> {
+    let form = get_form(pool, company_id, id).await?.ok_or(AppError::NotFound)?;
+    let dir = std::env::temp_dir().join(format!("pg-{}-{}", id, Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    let prefix = dir.join("p");
+    let n = (page + 1).to_string();
+    let out = std::process::Command::new("pdftoppm")
+        .args(["-png", "-r", &dpi.to_string(), "-f", &n, "-l", &n])
+        .arg(&form.file_path)
+        .arg(&prefix)
+        .output();
+    let result = (|| {
+        let out = out.map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+        if !out.status.success() {
+            return Err(AppError::BadRequest("could not render page".into()));
+        }
+        // pdftoppm names files like p-<n>.png (zero-padded to page count width).
+        let png = std::fs::read_dir(&dir)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .find(|p| p.extension().map(|x| x == "png").unwrap_or(false))
+            .ok_or_else(|| AppError::BadRequest("no page rendered".into()))?;
+        std::fs::read(&png).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
 }
 
 /// Generate a supporting-statement / attachment PDF and file it on the entity's
