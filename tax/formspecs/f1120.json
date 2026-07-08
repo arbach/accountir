@@ -1,0 +1,22 @@
+{
+ "_doc": "Form 1120 P&L from compute; Schedule L/M-1 need a balance-sheet compute step (not yet wired).",
+ "identity": {
+  "topmostSubform[0].Page1[0].NameFieldsReadOrder[0].f1_4[0]": "profile.legal_name",
+  "topmostSubform[0].Page1[0].NameFieldsReadOrder[0].f1_5[0]": "profile.address.line",
+  "topmostSubform[0].Page1[0].NameFieldsReadOrder[0].f1_7[0]": "profile.address.csz",
+  "topmostSubform[0].Page1[0].f1_11[0]": "profile.date_formed"
+ },
+ "amounts": {
+  "topmostSubform[0].Page1[0].f1_14[0]": "compute.f1120.line1a_gross_receipts",
+  "topmostSubform[0].Page1[0].f1_16[0]": "compute.f1120.line1c_net_receipts",
+  "topmostSubform[0].Page1[0].f1_18[0]": "compute.f1120.line3_gross_profit",
+  "topmostSubform[0].Page1[0].f1_20[0]": "compute.f1120.line5_interest",
+  "topmostSubform[0].Page1[0].f1_26[0]": "compute.f1120.line11_total_income",
+  "topmostSubform[0].Page1[0].f1_32[0]": "compute.f1120.line17_taxes_licenses",
+  "topmostSubform[0].Page1[0].f1_41[0]": "compute.f1120.line26_other_deductions",
+  "topmostSubform[0].Page1[0].f1_42[0]": "compute.f1120.line27_total_deductions",
+  "topmostSubform[0].Page1[0].f1_43[0]": "compute.f1120.line28_income_before_nol",
+  "topmostSubform[0].Page1[0].f1_47[0]": "compute.f1120.line30_taxable_income"
+ },
+ "checkboxes": {}
+}

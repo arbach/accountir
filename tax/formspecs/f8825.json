@@ -1,0 +1,12 @@
+{
+ "_doc": "Form 8825 rental totals from compute; per-property detail is entity-specific.",
+ "identity": {
+  "topmostSubform[0].Page1[0].f1_1[0]": "profile.legal_name",
+  "topmostSubform[0].Page1[0].f1_2[0]": "profile.ein"
+ },
+ "amounts": {
+  "topmostSubform[0].Page1[0].Table_Lines2-17[0].Line19[0].f1_99[0]": "compute.f8825.line18a_total_gross_rents",
+  "topmostSubform[0].Page1[0].f1_113[0]": "compute.f8825.line19_net_rental_real_estate"
+ },
+ "checkboxes": {}
+}

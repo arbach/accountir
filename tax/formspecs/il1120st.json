@@ -1,0 +1,19 @@
+{
+ "_doc": "IL-1120-ST: identity from profile (fixes the blank address/NAICS bugs); net income from federal Schedule K. Replacement tax (1.5%) needs an IL compute step \u2014 see _todo.",
+ "_todo": "map Line 2 net rental (rental entities) + Step 6 replacement tax via an IL compute producing il.* keys",
+ "identity": {
+  "Line A. Enter your complete legal business name": "profile.legal_name",
+  "Line N. Enter your federal employer identification number (FEIN) first two digits": "profile.ein.first2",
+  "Line N. Enter the last seven digits of your federal employer identification number (FEIN)": "profile.ein.last7",
+  "Line B. Enter your mailing address": "profile.address.line",
+  "Line B. Enter the city from your mailing address": "profile.address.city",
+  "Line B. Enter the state from your mailing address": "profile.address.state",
+  "Line B. Enter the ZIP from your mailing address": "profile.address.zip",
+  "Line P. Enter your North American Industry Classification System (NAICS) Code.  See instructions": "profile.naics_code"
+ },
+ "amounts": {
+  "Step 2: Line 1 - Ordinary income or loss, or equivalent from federal Schedule K": "compute.schedule_k.line1_ordinary_business_income",
+  "Step 3: Line 13 - Subtract Line 12 from Line 7.  This amount is your total unmodified base income or loss": "compute.schedule_k.line1_ordinary_business_income"
+ },
+ "checkboxes": {}
+}

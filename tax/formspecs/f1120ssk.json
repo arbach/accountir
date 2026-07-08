@@ -1,4 +1,15 @@
 {
-  "5005": "ein", "5006": "legal_name+address", "5010": "shareholder_ssn",
-  "5011": "shareholder_name+address", "5015": "ownership_pct"
+ "_doc": "Schedule K-1: identity from profile+shareholder, boxes from compute.",
+ "identity": {
+  "topmostSubform[0].Page1[0].LeftCol[0].f1_06[0]": "profile.ein",
+  "topmostSubform[0].Page1[0].LeftCol[0].f1_07[0]": "profile.legal_name",
+  "topmostSubform[0].Page1[0].LeftCol[0].f1_11[0]": "profile.shareholder_ssn",
+  "topmostSubform[0].Page1[0].LeftCol[0].f1_12[0]": "profile.shareholder_name",
+  "topmostSubform[0].Page1[0].LeftCol[0].f1_16[0]": "compute.general.ownership_percentage"
+ },
+ "amounts": {
+  "topmostSubform[0].Page1[0].RightCol[0].Lines1-12[0].f1_21[0]": "compute.schedule_k1.box1_ordinary_business_income",
+  "topmostSubform[0].Page1[0].RightCol[0].Lines1-12[0].f1_22[0]": "compute.schedule_k1.box2_net_rental_real_estate"
+ },
+ "checkboxes": {}
 }

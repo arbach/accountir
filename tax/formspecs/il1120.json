@@ -1,0 +1,21 @@
+{
+ "_doc": "IL-1120: identity from profile; federal taxable income from compute. Replacement tax (2.5%) needs an IL compute step \u2014 see _todo.",
+ "_todo": "Step 6 replacement/income tax via an IL compute producing il.* keys",
+ "identity": {
+  "Step 1 : Line A - Enter your complete legal business name": "profile.legal_name",
+  "Step 1 - Line N - Enter the initial two digits of your federal employer identification number (FEIN)": "profile.ein.first2",
+  "Step 1 - Line B - Enter your mailing address": "profile.address.line",
+  "Step 1 - Line B - Enter the city from your mailing address": "profile.address.city",
+  "Step 1 - Line B - Enter the state from your mailing address": "profile.address.state",
+  "Step 1 - Line B - Enter the ZIP from your mailing address": "profile.address.zip",
+  "Step 1 - Line P - Enter your North American Industry Classification System (NAICS) Code. See instructions": "profile.naics_code"
+ },
+ "amounts": {
+  "Step 2 - Line 1 - Federal taxable income from U.S. Form 1120, Line 30. Attach a copy of your federal return": "compute.f1120.line28_income_before_nol",
+  "Step 3 - Line 23 - Base income or loss. Subtract Line 22 from Line 9": "compute.f1120.line28_income_before_nol"
+ },
+ "checkboxes": {
+  "Step 1 - Line T - Indicate your method of accounting - Cash": "profile.accounting_method==cash",
+  "Step 1 - Line T - Indicate your method of accounting - Accrual": "profile.accounting_method==accrual"
+ }
+}

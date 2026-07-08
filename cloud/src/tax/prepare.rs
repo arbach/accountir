@@ -40,6 +40,26 @@ pub fn computed_lines(entity_key: &str, year: i32) -> AppResult<Value> {
 ///   "literal:<text>"  -> the literal text
 fn resolve(src: &str, profile: &Value, computed: &Value) -> Option<Value> {
     if let Some(path) = src.strip_prefix("profile.") {
+        // composite address helpers (the profile stores address as an object)
+        if path == "address.line" || path == "address.csz" {
+            let a = profile.get("address")?;
+            let g = |k: &str| a.get(k).and_then(|v| v.as_str()).unwrap_or("");
+            let s = if path == "address.line" {
+                let (l1, l2) = (g("line1"), g("line2"));
+                if l2.is_empty() { l1.to_string() } else { format!("{l1}, {l2}") }
+            } else {
+                format!("{}, {} {}", g("city"), g("state"), g("zip")).trim().to_string()
+            };
+            return Some(Value::String(s));
+        }
+        // FEIN split (IL forms take the first 2 + last 7 digits in separate boxes)
+        if path == "ein.first2" || path == "ein.last7" {
+            let digits: String = profile.get("ein").and_then(|v| v.as_str()).unwrap_or("")
+                .chars().filter(|c| c.is_ascii_digit()).collect();
+            let s = if path == "ein.first2" { digits.chars().take(2).collect() }
+                    else { digits.chars().skip(2).collect() };
+            return Some(Value::String(s));
+        }
         let mut cur = profile;
         for seg in path.split('.') {
             cur = cur.get(seg)?;
