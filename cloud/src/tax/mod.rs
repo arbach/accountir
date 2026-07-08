@@ -306,6 +306,17 @@ struct SignAnchor {
     date_y: f64,
 }
 
+/// Only these forms carry a taxpayer/officer signature line. Schedule K-1s,
+/// Form 8825, supporting statements and other attachments are filed WITH their
+/// parent return and are never separately signed — signing them just drops the
+/// image in a random spot.
+fn is_signable(form_code: &str) -> bool {
+    matches!(
+        form_code,
+        "f1040" | "il1040" | "f1120" | "f1120s" | "f1065" | "il1120" | "il1120st" | "f8832"
+    )
+}
+
 fn signature_anchor(form_code: &str) -> SignAnchor {
     // Coordinates in PDF points; calibrated against the official 2025 IRS PDFs.
     // Personal returns sign in the "Sign Here" block on page 2.
@@ -342,6 +353,12 @@ pub async fn sign_form(
             "form must be approved before it can be signed".into(),
         ));
     }
+    if !is_signable(&form.form_code) {
+        return Err(AppError::BadRequest(format!(
+            "{} has no signature line — it is filed with its parent return, not signed separately",
+            form.form_code
+        )));
+    }
 
     // How many pages? Needed to resolve a from-the-end page index.
     let listed = run_taxpdf(&["list", &form.file_path]).map_err(AppError::BadRequest)?;
@@ -353,7 +370,7 @@ pub async fn sign_form(
     std::fs::write(&sig_path, signature_png).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
     let today = chrono::Utc::now().date_naive().format("%m/%d/%Y").to_string();
     let spec = json!({
-        "stamps": [{ "page": page, "x": a.x, "y": a.y, "w": a.w,
+        "stamps": [{ "page": page, "x": a.x, "y": a.y, "w": a.w, "maxH": 28.0,
                      "image": sig_path.to_str().unwrap_or_default() }],
         "texts":  [{ "page": page, "x": a.date_x, "y": a.date_y, "text": today, "size": 10 }],
     });

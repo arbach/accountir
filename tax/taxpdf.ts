@@ -95,7 +95,8 @@ if (cmd === "dump") {
   const pages = doc.getPages();
   for (const st of spec.stamps ?? []) {            // image stamps (signatures)
     const png = await doc.embedPng(await Deno.readFile(st.image));
-    const w = st.w ?? 120, h = w * (png.height / png.width);
+    let w = st.w ?? 120, h = w * (png.height / png.width);
+    if (st.maxH && h > st.maxH) { h = st.maxH; w = h * (png.width / png.height); } // keep signatures line-height
     pages[st.page ?? 0].drawImage(png, { x: st.x, y: st.y, width: w, height: h });
   }
   for (const t of spec.texts ?? []) {              // text marks (dates, etc.)
