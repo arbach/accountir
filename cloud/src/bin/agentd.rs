@@ -90,6 +90,9 @@ struct Cfg {
     idle_secs: u64,
     turn_timeout_secs: u64,
     first_event_timeout_secs: u64,
+    /// Auto-compact the session when its context usage crosses this fraction
+    /// (0.0–1.0) of the model's context window. 0 disables.
+    compact_threshold: f64,
 }
 
 struct Daemon {
@@ -247,6 +250,56 @@ fn is_resume_failure(v: &Value) -> bool {
 /// Run one turn against the (possibly fresh) agent process, forwarding every
 /// stream-json event line into `tx` AS IT ARRIVES, through the terminating
 /// `result` event.
+/// Estimate how full the session context is from a turn's `result` message:
+/// (last request's prompt tokens) / (model context window), in 0.0–1.0.
+fn context_fraction(result: &Value) -> Option<f64> {
+    let u = result.get("usage")?;
+    let g = |k: &str| u.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let used = g("input_tokens") + g("cache_read_input_tokens") + g("cache_creation_input_tokens");
+    let window = result
+        .get("modelUsage")
+        .and_then(|m| m.as_object())
+        .and_then(|m| m.values().next())
+        .and_then(|mu| mu.get("contextWindow"))
+        .and_then(|v| v.as_f64())
+        .filter(|w| *w > 0.0)
+        .unwrap_or(200_000.0);
+    (used > 0.0).then_some(used / window)
+}
+
+/// Fire an internal `/compact` on the live session and drain it to its result.
+/// Events are NOT forwarded to the client — this is background housekeeping.
+async fn compact_session(
+    d: &Daemon,
+    slot: &mut Option<AgentProc>,
+    company_id: Uuid,
+) -> anyhow::Result<()> {
+    let line = user_turn_line("/compact")?;
+    let proc = match slot.as_mut() {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    proc.stdin.write_all(line.as_bytes()).await?;
+    proc.stdin.flush().await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(d.cfg.turn_timeout_secs);
+    loop {
+        match tokio::time::timeout_at(deadline, proc.stdout.next_line()).await {
+            Err(_) => anyhow::bail!("compact timed out"),
+            Ok(Ok(Some(l))) => {
+                if let Ok(v) = serde_json::from_str::<Value>(&l) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("result") {
+                        break;
+                    }
+                }
+            }
+            Ok(Ok(None)) | Ok(Err(_)) => anyhow::bail!("stream closed during compact"),
+        }
+    }
+    slot.as_mut().unwrap().last_used = Instant::now();
+    tracing::info!(company = %company_id, "session auto-compacted");
+    Ok(())
+}
+
 async fn run_turn(
     d: &Daemon,
     slot: &mut Option<AgentProc>,
@@ -289,6 +342,7 @@ async fn run_turn(
     // kill it, respawn with --resume, and replay the turn once.
     let mut first_event_deadline =
         tokio::time::Instant::now() + Duration::from_secs(d.cfg.first_event_timeout_secs);
+    let mut last_result: Option<Value> = None;
     loop {
         let eff_deadline =
             if forwarded == 0 { first_event_deadline.min(deadline) } else { deadline };
@@ -361,6 +415,7 @@ async fn run_turn(
                 // but we still drain to the result so the session stays consistent.
                 let _ = tx.send(Ok(Bytes::from(l + "\n"))).await;
                 if is_result {
+                    last_result = Some(v);
                     break;
                 }
             }
@@ -394,6 +449,26 @@ async fn run_turn(
         }
     }
     slot.as_mut().unwrap().last_used = Instant::now();
+
+    // Auto-compact: if this turn left the context past the threshold, compact now
+    // (in the background, same held guard) so the next turn starts with headroom.
+    if d.cfg.compact_threshold > 0.0 {
+        if let Some(frac) = last_result.as_ref().and_then(context_fraction) {
+            if frac >= d.cfg.compact_threshold {
+                tracing::info!(company = %company_id, frac, "context past threshold; auto-compacting");
+                let _ = tx
+                    .send(Ok(Bytes::from(
+                        json!({ "type": "system", "subtype": "auto_compact", "context_fraction": frac })
+                            .to_string()
+                            + "\n",
+                    )))
+                    .await;
+                if let Err(e) = compact_session(d, slot, company_id).await {
+                    tracing::warn!(company = %company_id, error = %e, "auto-compact failed");
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -616,6 +691,9 @@ async fn main() -> anyhow::Result<()> {
         first_event_timeout_secs: env_or("AGENT_FIRST_EVENT_TIMEOUT_SECS", "120")
             .parse()
             .unwrap_or(120),
+        compact_threshold: env_or("AGENT_COMPACT_THRESHOLD", "0.75")
+            .parse()
+            .unwrap_or(0.75),
     };
     tokio::fs::create_dir_all(&cfg.state_dir).await?;
 
