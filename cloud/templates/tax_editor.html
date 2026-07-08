@@ -16,6 +16,9 @@
   .fld { position: absolute; box-sizing: border-box; font-size: 11px; border: 1px solid rgba(37,99,235,.4);
     background: rgba(37,99,235,.06); padding: 0 2px; }
   .fld:focus { outline: 2px solid var(--accent, #2563eb); background: #fff; }
+  .linebar { position: absolute; left: 0; width: 100%; display: none; z-index: 0;
+    background: rgba(37, 99, 235, .14); border-top: 1px solid rgba(37,99,235,.3);
+    border-bottom: 1px solid rgba(37,99,235,.3); pointer-events: none; }
   .anno { position: absolute; box-sizing: border-box; cursor: move; }
   .anno.sel { outline: 2px dashed var(--accent, #2563eb); }
   .anno.text { font-size: 12px; color: #0f172a; padding: 1px 3px; min-width: 30px; white-space: pre; background: rgba(255,255,255,.01); }
@@ -49,6 +52,19 @@
   let STATE = null, annos = [], tool = 'select', sel = null;
   const status = document.getElementById('ed-status');
   function setStatus(t) { status.textContent = t; }
+
+  // Line highlighter: a full-width band snapped to the hovered field's row so
+  // you can read the label text across the whole line.
+  const lineBar = document.createElement('div');
+  lineBar.className = 'linebar';
+  const LINE_PAD = 0.004; // fraction of page height to extend above/below
+  function showLine(pg, yf, hf) {
+    pg.appendChild(lineBar);
+    lineBar.style.top = ((yf - LINE_PAD) * 100) + '%';
+    lineBar.style.height = ((hf + LINE_PAD * 2) * 100) + '%';
+    lineBar.style.display = 'block';
+  }
+  function hideLine() { lineBar.style.display = 'none'; }
 
   window.setTool = function (t) {
     tool = t;
@@ -126,6 +142,8 @@
       el.style.left = (xf * 100) + '%'; el.style.top = (yf * 100) + '%';
       el.style.width = (wf * 100) + '%'; el.style.height = (hf * 100) + '%';
       el.title = f.name;
+      el.addEventListener('mouseenter', () => showLine(pg, yf, hf));
+      el.addEventListener('mouseleave', hideLine);
       pg.appendChild(el);
     });
     // Annotation overlays.
