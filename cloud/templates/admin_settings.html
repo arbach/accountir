@@ -56,9 +56,10 @@
   <hr style="border:none; border-top:1px solid var(--border); margin:16px 0;">
   {% endif %}
 
-  <div class="sig-tabs">
+  <div class="sig-tabs" style="align-items:center;">
     <button type="button" class="btn btn-secondary sig-tab" data-tab="type" onclick="sigTab('type')">Type signature</button>
     <button type="button" class="btn btn-ghost sig-tab" data-tab="upload" onclick="sigTab('upload')">Upload image</button>
+    <span id="sig-status" class="muted" style="font-size:12px; margin-left:8px;"></span>
   </div>
 
   <!-- Type signature -->
@@ -76,6 +77,7 @@
     <div class="sig-preview"><span id="sig-render">{{ sig_typed_text }}</span></div>
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">Save typed signature</button>
+      <span class="muted" style="font-size:12px;">saves automatically as you type</span>
     </div>
   </form>
 
@@ -107,5 +109,56 @@
     el.style.fontFamily = '"sig-' + f + '"';
   }
   sigRender();
+
+  (function () {
+    var statusEl = document.getElementById('sig-status');
+    function setStatus(t) { statusEl.textContent = t; }
+    // Refresh (or create) the "Current signature" preview after a save.
+    function refreshPreview() {
+      var img = document.querySelector('#signature-card img[alt="signature"]');
+      var url = '/app/admin/signature.png?v=' + Date.now();
+      if (img) { img.src = url; }
+      else { location.reload(); }   // first-ever signature: show the saved block
+    }
+    // Post a form via fetch (no page reload) and report status. Multipart for
+    // the file upload; urlencoded for the typed form (axum Form extractor).
+    function submitForm(form, savingMsg) {
+      setStatus(savingMsg);
+      var opts = { method: 'POST' };
+      if ((form.getAttribute('enctype') || '') === 'multipart/form-data') {
+        opts.body = new FormData(form);
+      } else {
+        opts.body = new URLSearchParams(new FormData(form));
+      }
+      fetch(form.action, opts)
+        .then(function (r) {
+          if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
+          setStatus('Saved ✓'); refreshPreview();
+        })
+        .catch(function (e) { setStatus('Save failed: ' + e.message); });
+    }
+
+    var typeForm = document.getElementById('sig-type');
+    var uploadForm = document.getElementById('sig-upload');
+    var text = document.getElementById('sig-text');
+    var font = document.getElementById('sig-font');
+
+    // Typed signature: auto-save (debounced) on text/font change + on submit.
+    var timer = null;
+    function saveTypedSoon() {
+      if (!text.value.trim()) return;
+      clearTimeout(timer);
+      setStatus('Saving…');
+      timer = setTimeout(function () { submitForm(typeForm, 'Saving…'); }, 900);
+    }
+    text.addEventListener('input', saveTypedSoon);
+    font.addEventListener('change', function () { sigRender(); saveTypedSoon(); });
+    typeForm.addEventListener('submit', function (e) { e.preventDefault(); clearTimeout(timer); submitForm(typeForm, 'Saving…'); });
+
+    // Uploaded image: auto-save the moment a file is chosen + on submit.
+    var fileInput = uploadForm.querySelector('input[type=file]');
+    fileInput.addEventListener('change', function () { if (fileInput.files.length) submitForm(uploadForm, 'Uploading…'); });
+    uploadForm.addEventListener('submit', function (e) { e.preventDefault(); if (fileInput.files.length) submitForm(uploadForm, 'Uploading…'); });
+  })();
 </script>
 {% endblock %}
