@@ -238,10 +238,11 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "add_tax_attachment",
-            "description": "Add a supporting statement / attachment PDF to a return — for anything a blank IRS form can't hold inline, like the Form 1120-S line-20 'Other deductions' itemization. Generates a clean statement PDF and files it under the entity's tax forms (appears in list_tax_forms). Provide a title, optional subtitle/heading, and either itemized lines (label + amount, with an optional total) or freeform paragraphs.",
+            "description": "Add a supporting statement / attachment to a return — for anything a blank IRS form can't hold inline, like the Form 1120-S line-20 'Other deductions' itemization. Generates a clean statement PDF. By default it files a standalone attachment form; pass attach_to_form_id to instead append the statement page(s) directly onto that form's PDF so the return + its statements are one document. Provide a title, optional subtitle/heading, and either itemized lines (label + amount, with an optional total) or freeform paragraphs.",
             "input_schema": {"type": "object", "properties": {
                 "year": {"type": "integer"},
                 "title": {"type": "string", "description": "e.g. 'Form 1120-S Line 20 - Other Deductions'"},
+                "attach_to_form_id": {"type": "string", "description": "Optional form id (from list_tax_forms). If set, the statement is appended onto that form's PDF instead of filed separately."},
                 "subtitle": {"type": "string", "description": "e.g. entity name + EIN + tax year"},
                 "heading": {"type": "string"},
                 "items": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "amount": {"type": "number"}}, "required": ["label", "amount"]}},
@@ -910,12 +911,18 @@ async fn add_tax_attachment_tool(ctx: &ToolContext<'_>, input: &Value) -> Value 
     if year < 2000 {
         return json!({ "error": "a valid tax year is required" });
     }
+    let attach_to = input
+        .get("attach_to_form_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok());
     // the input IS the taxpdf `statement` spec (title/subtitle/heading/items/total/paragraphs)
-    match crate::tax::add_attachment(ctx.pool, ctx.company_id, year, title, input).await {
+    match crate::tax::add_attachment(ctx.pool, ctx.company_id, year, title, input, attach_to).await {
         Ok(id) => json!({
             "ok": true, "form_id": id,
+            "appended": attach_to.is_some(),
             "review_url": format!("/app/tax/forms/{id}/pdf"),
-            "next": "the attachment is filed under this year's tax forms; tell the user to review it on /app/tax",
+            "next": if attach_to.is_some() { "the statement was appended onto the form's PDF; review it on /app/tax" }
+                    else { "the attachment is filed under this year's tax forms; review it on /app/tax" },
         }),
         Err(e) => json!({ "error": format!("{e}") }),
     }

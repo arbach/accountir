@@ -106,4 +106,11 @@ if (cmd === "dump") {
 } else if (cmd === "list") {
   const out = form.getFields().map((f) => ({ name: f.getName(), type: f.constructor.name }));
   console.log(JSON.stringify({ fields: out, pages: doc.getPageCount() }));
-} else { console.error("usage: taxpdf.ts fill|dump|list ..."); Deno.exit(2); }
+} else if (cmd === "append") {
+  // append <base.pdf> <extra.pdf> <out.pdf> — copy every page of extra onto base
+  const extra = await PDFDocument.load(await Deno.readFile(a2));
+  const pages = await doc.copyPages(extra, extra.getPageIndices());
+  for (const p of pages) doc.addPage(p);
+  await Deno.writeFile(a3, await doc.save());
+  console.log(JSON.stringify({ ok: true, pages: doc.getPageCount() }));
+} else { console.error("usage: taxpdf.ts fill|dump|list|stamp|statement|append ..."); Deno.exit(2); }

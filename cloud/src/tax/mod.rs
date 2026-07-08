@@ -623,24 +623,58 @@ pub async fn fill_form(
 /// ({title, subtitle?, heading?, items?:[{label,amount}], total?:{label,amount}, paragraphs?}).
 /// This is how the agent adds things a blank IRS form can't hold inline — e.g. the
 /// Form 1120-S line-20 "Other deductions" itemization. Returns the new form id.
+/// When `attach_to` is Some, the statement page(s) are appended directly onto that
+/// form's PDF (return + statements become one document) and its id is returned.
+/// When None, a standalone attachment form is filed and the new id is returned.
 pub async fn add_attachment(
     pool: &PgPool,
     company_id: Uuid,
     year: i32,
     title: &str,
     spec: &Value,
+    attach_to: Option<Uuid>,
 ) -> AppResult<Uuid> {
-    let dir = forms_dir().join(company_id.to_string());
-    std::fs::create_dir_all(&dir).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
     let id = Uuid::new_v4();
-    let out = dir.join(format!("attachment-{year}-{id}.pdf"));
-    let out_str = out.to_string_lossy().to_string();
+    // 1. generate the statement PDF into a temp file
+    let stmt_pdf = std::env::temp_dir().join(format!("stmt-{id}.pdf"));
+    let stmt_str = stmt_pdf.to_string_lossy().to_string();
     let spec_path = std::env::temp_dir().join(format!("stmt-{id}.json"));
     std::fs::write(&spec_path, serde_json::to_vec(spec).unwrap_or_default())
         .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
-    run_taxpdf(&["statement", spec_path.to_str().unwrap_or_default(), &out_str])
+    run_taxpdf(&["statement", spec_path.to_str().unwrap_or_default(), &stmt_str])
         .map_err(AppError::BadRequest)?;
     let _ = std::fs::remove_file(&spec_path);
+
+    // 2a. append mode — merge the statement onto an existing form's PDF
+    if let Some(form_id) = attach_to {
+        let form = get_form(pool, company_id, form_id).await?.ok_or(AppError::NotFound)?;
+        if form.status == "mailed" {
+            return Err(AppError::BadRequest("form already mailed; pull a fresh copy".into()));
+        }
+        let out = format!("{}.tmp.pdf", form.file_path);
+        run_taxpdf(&["append", &form.file_path, &stmt_str, &out]).map_err(AppError::BadRequest)?;
+        std::fs::rename(&out, &form.file_path).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+        let _ = std::fs::remove_file(&stmt_pdf);
+        let mut conn = pool.acquire().await?;
+        let mut tx = sqlx::Acquire::begin(&mut conn).await?;
+        set_tenant(&mut tx, company_id).await?;
+        sqlx::query(
+            "UPDATE tax_forms SET fields = COALESCE(fields, '{}'::jsonb) || jsonb_build_object('attachments', COALESCE(fields->'attachments', '[]'::jsonb) || $2::jsonb), updated_at = now() WHERE id = $1",
+        )
+        .bind(form_id)
+        .bind(json!([{ "title": title, "spec": spec }]))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok(form_id);
+    }
+
+    // 2b. standalone mode — file a new attachment form
+    let dir = forms_dir().join(company_id.to_string());
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    let out = dir.join(format!("attachment-{year}-{id}.pdf"));
+    let out_str = out.to_string_lossy().to_string();
+    std::fs::rename(&stmt_pdf, &out).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
 
     let mut conn = pool.acquire().await?;
     let mut tx = sqlx::Acquire::begin(&mut conn).await?;
