@@ -165,7 +165,12 @@
       <tr>
         <td><a href="/app/tax/forms/{{ f.id }}/editor" title="Open the editor">{{ f.title }}</a></td>
         <td>{{ f.year }}</td>
-        <td><span class="badge">{{ f.status }}</span></td>
+        <td>
+          {% if f.status.as_str() == "mailed" %}<span class="badge" style="background:#16a34a; color:#fff;">🔒 mailed</span>
+          {% else if f.status.as_str() == "signed" %}<span class="badge" style="background:#2563eb; color:#fff;">signed</span>
+          {% else if f.status.as_str() == "approved" %}<span class="badge" style="background:#0891b2; color:#fff;">approved</span>
+          {% else %}<span class="badge" style="background:#e5e7eb; color:#374151;">{{ f.status }}</span>{% endif %}
+        </td>
         <td class="muted" style="font-size:12px;">
           {% if f.lob_id.is_some() %}{{ f.lob_status.as_deref().unwrap_or("") }} · {{ f.lob_id.as_deref().unwrap_or("") }} · {{ f.mailed_display() }}
           {% else if f.signed_at.is_some() %}✍ signed {{ f.signed_display() }}
