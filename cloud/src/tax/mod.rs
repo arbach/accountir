@@ -287,6 +287,13 @@ pub async fn review_form_by_id(
 }
 
 pub async fn approve_form(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<()> {
+    // A mailed (filed) form is locked — never re-approve or re-review it.
+    let form = get_form(pool, company_id, id).await?.ok_or(AppError::NotFound)?;
+    if form.status == "mailed" {
+        return Err(AppError::BadRequest(
+            "this form was already mailed/filed and is locked — it cannot be changed".into(),
+        ));
+    }
     // HARD GATE: the deterministic-loop + per-item AI review must pass first.
     let model = std::env::var("TAX_REVIEW_MODEL").unwrap_or_else(|_| "sonnet".to_string());
     let review = review_form_by_id(pool, company_id, id, &model).await?;
@@ -413,6 +420,11 @@ pub async fn sign_form(
 
 pub async fn delete_form(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<()> {
     if let Some(f) = get_form(pool, company_id, id).await? {
+        if f.status == "mailed" {
+            return Err(AppError::BadRequest(
+                "this form was already mailed/filed and is locked — it cannot be deleted".into(),
+            ));
+        }
         let _ = std::fs::remove_file(&f.file_path);
     }
     let mut conn = pool.acquire().await?;

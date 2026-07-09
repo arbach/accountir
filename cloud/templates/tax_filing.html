@@ -172,7 +172,11 @@
           {% else %}—{% endif %}
         </td>
         <td>
+          {% if f.status.as_str() == "mailed" %}
+          <a href="/app/tax/forms/{{ f.id }}/editor" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" title="Filed &amp; mailed — locked, read-only">🔒 View</a>
+          {% else %}
           <a href="/app/tax/forms/{{ f.id }}/editor" class="btn btn-secondary" style="padding:2px 10px; font-size:12px;">✎ Edit</a>
+          {% endif %}
           <a href="/app/tax/forms/{{ f.id }}/pdf" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" target="_blank">PDF</a>
           {% if f.status.as_str() == "filled" %}
           <form method="post" action="/app/tax/forms/{{ f.id }}/approve" style="display:inline;" onsubmit="return confirm('Approve this form for mailing? Review the PDF first.')">
