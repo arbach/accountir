@@ -176,6 +176,117 @@ Infer the full year from the statement period/closing date. \
 Do NOT include running balances, summaries, totals, interest-rate lines, or marketing text — only real transactions. \
 If there are no transactions, respond with [].";
 
+/// A fully parsed statement: every transaction line PLUS the printed
+/// beginning/ending balances, so the import can verify the parse to the penny
+/// (beginning + Σ transactions == ending) before anything is posted.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ParsedStatement {
+    pub beginning_balance_cents: Option<i64>,
+    pub ending_balance_cents: Option<i64>,
+    #[serde(default)]
+    pub period_start: Option<String>,
+    #[serde(default)]
+    pub period_end: Option<String>,
+    pub transactions: Vec<ParsedLine>,
+}
+
+impl ParsedStatement {
+    pub fn lines_sum_cents(&self) -> i64 {
+        self.transactions.iter().map(|l| l.amount_cents).sum()
+    }
+    /// Some(true/false) when both balances were found; None when unknown.
+    pub fn ties(&self) -> Option<bool> {
+        match (self.beginning_balance_cents, self.ending_balance_cents) {
+            (Some(b), Some(e)) => Some(b + self.lines_sum_cents() == e),
+            _ => None,
+        }
+    }
+}
+
+const SYSTEM_FULL: &str = "You are a precise bank/credit-card statement parser. \
+From the statement text, extract the printed beginning and ending balances AND every individual transaction line. \
+Respond with ONLY a JSON object — no prose, no markdown fences: \
+{\"beginning_balance_cents\":integer|null,\"ending_balance_cents\":integer|null,\
+\"period_start\":\"YYYY-MM-DD\"|null,\"period_end\":\"YYYY-MM-DD\"|null,\
+\"transactions\":[{\"date\":\"YYYY-MM-DD\",\"description\":string,\"amount_cents\":integer}]}. \
+CRITICAL SIGN RULE: sign each transaction in the STATEMENT'S OWN balance convention so that \
+beginning_balance_cents + sum(amount_cents) == ending_balance_cents EXACTLY. \
+For a checking/deposit account that means deposits positive, withdrawals/checks/fees negative. \
+For a credit-card statement (balance = amount owed) that means purchases/fees/interest POSITIVE and \
+payments/credits/refunds NEGATIVE. \
+Use the fee-inclusive amount printed on the line. Infer the year from the statement period. \
+Include EVERY transaction: checks, card purchases, fees, interest, reversals. \
+Do NOT include running balances, daily-balance tables, subtotals, or marketing text. \
+VERIFY the arithmetic identity before answering; if it does not hold, re-scan for missed lines. \
+If balances are not printed, use null for them but still return all transactions.";
+
+/// Parse a complete statement (balances + all lines) via the agent daemon's
+/// stateless /oneshot endpoint. One corrective retry if the arithmetic
+/// identity beginning + Σ == ending fails on the first pass.
+pub async fn parse_statement_with_ai(statement_text: &str) -> Result<ParsedStatement, String> {
+    let text: String = statement_text.chars().take(200_000).collect();
+    let first = oneshot_parse_full(&text, None).await?;
+    if first.ties() == Some(false) {
+        let delta = first.beginning_balance_cents.unwrap_or(0) + first.lines_sum_cents()
+            - first.ending_balance_cents.unwrap_or(0);
+        let hint = format!(
+            "Your previous parse did NOT tie: beginning + sum(transactions) - ending = {} cents. \
+             You missed, duplicated, or mis-signed at least one line. Re-extract carefully.",
+            delta
+        );
+        let second = oneshot_parse_full(&text, Some(&hint)).await?;
+        return Ok(second);
+    }
+    Ok(first)
+}
+
+async fn oneshot_parse_full(text: &str, hint: Option<&str>) -> Result<ParsedStatement, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(620))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let prompt = match hint {
+        Some(h) => format!("{h}\n\nStatement text:\n\n{text}"),
+        None => format!("Statement text:\n\n{text}"),
+    };
+    let resp = client
+        .post(format!("{}/oneshot", crate::ai::agent::agentd_url()))
+        .json(&json!({ "system": SYSTEM_FULL, "prompt": prompt }))
+        .send()
+        .await
+        .map_err(|e| format!("agent daemon unreachable: {e}"))?;
+    let body: Value = resp.json().await.map_err(|e| format!("bad daemon reply: {e}"))?;
+    if !body["ok"].as_bool().unwrap_or(false) {
+        return Err(format!(
+            "agent parse failed: {}",
+            body["error"].as_str().unwrap_or("unknown")
+        ));
+    }
+    let out = body["result"].as_str().unwrap_or("").to_string();
+    let json_str = extract_json_object(&out);
+    serde_json::from_str::<ParsedStatement>(&json_str).map_err(|e| {
+        let preview: String = out.chars().take(200).collect();
+        format!("could not parse AI response as a statement: {e}; got: {preview}")
+    })
+}
+
+/// Pull the outermost JSON object out of an LLM response, tolerating stray
+/// prose or markdown fences.
+fn extract_json_object(s: &str) -> String {
+    let t = s.trim();
+    let t = t
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    if let (Some(start), Some(end)) = (t.find('{'), t.rfind('}')) {
+        if end > start {
+            return t[start..=end].to_string();
+        }
+    }
+    t.to_string()
+}
+
 /// Parse statement text into transaction lines using the Claude CLI via the
 /// agent daemon's stateless /oneshot endpoint (subscription auth, no API key).
 pub async fn parse_with_ai(statement_text: &str) -> Result<Vec<ParsedLine>, String> {

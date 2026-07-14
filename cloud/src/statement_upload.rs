@@ -24,6 +24,92 @@ pub struct UploadOutcome {
     pub unparsed: u32,
 }
 
+/// Outcome of a deterministic, tie-verified statement import.
+#[derive(Debug, serde::Serialize)]
+pub struct ImportReport {
+    pub parsed: usize,
+    pub imported: u32,
+    pub duplicates: u32,
+    pub unparsed: u32,
+    pub beginning_balance_cents: Option<i64>,
+    pub ending_balance_cents: Option<i64>,
+    pub lines_sum_cents: i64,
+    /// beginning + Σ lines == ending, to the penny. None = balances not printed.
+    pub parse_ties: Option<bool>,
+    pub period_start: Option<String>,
+    pub period_end: Option<String>,
+    pub posted: bool,
+    pub note: String,
+}
+
+/// Deterministic per-line statement import: AI-parse the FULL statement
+/// (balances + every line), verify beginning + Σ == ending TO THE PENNY, and
+/// only then post one balanced entry per line against `account_id` vs
+/// Uncategorized (dedup on date+amount). A parse that does not tie is refused
+/// (unless `force`), so a skipped/mangled line can never silently enter the
+/// books. This is the ingestion half of the bookkeeping loop; classification
+/// of the Uncategorized legs happens afterwards, evidence-first.
+pub async fn import_statement_verified(
+    pool: &sqlx::PgPool,
+    company_id: Uuid,
+    user_id: Uuid,
+    account_id: Uuid,
+    file_name: &str,
+    bytes: &[u8],
+    force: bool,
+) -> Result<ImportReport, String> {
+    let text = if bytes.starts_with(b"%PDF") {
+        crate::plaid::statements::extract_text_or_ocr(bytes).await?
+    } else {
+        String::from_utf8_lossy(bytes).to_string()
+    };
+    if text.trim().is_empty() {
+        return Err("no text could be extracted from the file".to_string());
+    }
+    let stmt = crate::plaid::statements::parse_statement_with_ai(&text).await?;
+    let parse_ties = stmt.ties();
+    let lines_sum = stmt.lines_sum_cents();
+    let mut report = ImportReport {
+        parsed: stmt.transactions.len(),
+        imported: 0,
+        duplicates: 0,
+        unparsed: 0,
+        beginning_balance_cents: stmt.beginning_balance_cents,
+        ending_balance_cents: stmt.ending_balance_cents,
+        lines_sum_cents: lines_sum,
+        parse_ties,
+        period_start: stmt.period_start.clone(),
+        period_end: stmt.period_end.clone(),
+        posted: false,
+        note: String::new(),
+    };
+    if parse_ties == Some(false) && !force {
+        let delta = stmt.beginning_balance_cents.unwrap_or(0) + lines_sum
+            - stmt.ending_balance_cents.unwrap_or(0);
+        report.note = format!(
+            "REFUSED to post: parse does not tie to the penny (beginning + Σlines − ending = {} cents \
+             even after a corrective retry). Nothing was posted. Retry, or pass force=true only if the \
+             statement itself is inconsistent.",
+            delta
+        );
+        return Ok(report);
+    }
+    let (imported, duplicates, unparsed) =
+        post_lines(pool, company_id, user_id, account_id, file_name, stmt.transactions)
+            .await
+            .map_err(|e| format!("posting failed: {e}"))?;
+    report.imported = imported;
+    report.duplicates = duplicates;
+    report.unparsed = unparsed;
+    report.posted = true;
+    report.note = match parse_ties {
+        Some(true) => "parse tied to the penny (beginning + Σ = ending); one balanced entry posted per new line".into(),
+        Some(false) => "FORCED despite a failed tie — verify this account against the statement manually".into(),
+        None => "statement balances not printed; lines posted without a tie check — verify the account balance".into(),
+    };
+    Ok(report)
+}
+
 pub async fn import_statement(
     pool: &sqlx::PgPool,
     company_id: Uuid,

@@ -335,11 +335,24 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "read_document",
-            "description": "Read the text of a stored document by document_id (from list_documents). PDFs are text-extracted (OCR if scanned). Use this to reference a prior-year tax return, K-1, statement, or legal/incorporation document when doing the books or preparing tax forms.",
+            "description": "Read the text of a stored document by document_id (from list_documents). PDFs are text-extracted (OCR if scanned). Use this to reference a prior-year tax return, K-1, statement, or legal/incorporation document when doing the books or preparing tax forms. Do NOT use this to transcribe a bank/card statement into the ledger — use import_statement for that.",
             "input_schema": {
                 "type": "object",
                 "properties": { "document_id": {"type": "string", "description": "id from list_documents"} },
                 "required": ["document_id"]
+            }
+        }),
+        json!({
+            "name": "import_statement",
+            "description": "THE deterministic per-transaction statement ingester — always use this (never hand-typed post_journal_entry calls) to get a bank/credit-card statement into the books. Server-side it extracts the FULL statement text (no truncation), parses every line plus the printed beginning/ending balances, verifies beginning + Σlines = ending TO THE PENNY, and only then posts one balanced entry per line: the statement account vs Uncategorized (9999), deduplicating on date+amount so overlapping uploads merge instead of duplicating. If the parse does not tie it REFUSES to post and nothing enters the ledger. Returns {parsed, imported, duplicates, unparsed, balances, parse_ties, posted, note}. Work one statement at a time in date order; afterwards classify the Uncategorized legs evidence-first. Card statements use the statement's own convention (charges positive, payments negative).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "description": "statement document id from list_documents"},
+                    "account_id": {"type": "string", "description": "ledger account id (from list_accounts) this statement belongs to, e.g. the checking or credit-card account"},
+                    "force": {"type": "boolean", "description": "post even if the parse fails the penny tie — ONLY when the statement itself is inconsistent; default false"}
+                },
+                "required": ["document_id", "account_id"]
             }
         }),
     ]
@@ -380,6 +393,7 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "set_address_label" => set_address_label_tool(ctx, input).await,
         "list_documents" => list_documents_tool(ctx).await,
         "read_document" => read_document_tool(ctx, input).await,
+        "import_statement" => import_statement_tool(ctx, input).await,
         "list_bank_connections" => list_bank_connections_tool(ctx).await,
         "navigate_to_page" => navigate_tool(input),
         // NOTE: "sync_bank" needs AppState (plaid config) and is handled by the
@@ -608,6 +622,50 @@ async fn read_document_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
         "truncated": truncated,
         "text": shown,
     })
+}
+
+/// Deterministic statement ingestion for the agent: loads the stored file
+/// server-side (full text, no context-window truncation), runs the verified
+/// per-line import, and returns only the summary report.
+async fn import_statement_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let Some(doc_id) = input
+        .get("document_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return json!({ "error": "document_id must be a UUID (from list_documents)" });
+    };
+    let Some(account_id) = input
+        .get("account_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return json!({ "error": "account_id must be a UUID (from list_accounts)" });
+    };
+    let force = input.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+    let file = match queries::get_company_file(ctx.pool, ctx.company_id, doc_id).await {
+        Ok(Some(f)) => f,
+        Ok(None) => return json!({ "error": "document not found for this company" }),
+        Err(e) => return json!({ "error": format!("{e}") }),
+    };
+    let bytes = match tokio::fs::read(&file.stored_path).await {
+        Ok(b) => b,
+        Err(e) => return json!({ "error": format!("could not read stored file: {e}") }),
+    };
+    match crate::statement_upload::import_statement_verified(
+        ctx.pool, ctx.company_id, ctx.user_id, account_id, &file.filename, &bytes, force,
+    )
+    .await
+    {
+        Ok(report) => {
+            let mut v = serde_json::to_value(&report).unwrap_or_else(|_| json!({}));
+            if let Some(o) = v.as_object_mut() {
+                o.insert("filename".into(), json!(file.filename));
+            }
+            v
+        }
+        Err(e) => json!({ "error": e }),
+    }
 }
 
 async fn set_address_label_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {

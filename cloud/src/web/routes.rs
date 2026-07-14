@@ -2375,13 +2375,14 @@ async fn account_statement_upload(
         return (StatusCode::BAD_REQUEST, "uploaded file is empty").into_response();
     }
 
-    let outcome = match crate::statement_upload::import_statement(
+    let outcome = match crate::statement_upload::import_statement_verified(
         &state.pool,
         company_id,
         user.id,
         account_uuid,
         &fname,
         &bytes,
+        false,
     )
     .await
     {
@@ -2394,20 +2395,30 @@ async fn account_statement_upload(
     };
     tracing::info!(account = %account_uuid, file = %fname, parsed = outcome.parsed,
         imported = outcome.imported, duplicates = outcome.duplicates,
-        unparsed = outcome.unparsed, "statement uploaded and imported");
+        unparsed = outcome.unparsed, posted = outcome.posted, ties = ?outcome.parse_ties,
+        "statement uploaded (verified import)");
 
+    let tie_line = match outcome.parse_ties {
+        Some(true) => "<li>✅ <strong>Tied to the penny</strong>: beginning + all lines = ending balance</li>".to_string(),
+        Some(false) => format!("<li>❌ <strong>Did not tie</strong> — {}</li>", esc_html(&outcome.note)),
+        None => "<li>⚠ Statement balances not printed; imported without a tie check</li>".to_string(),
+    };
+    let title = if outcome.posted { "Statement imported" } else { "Statement NOT imported" };
     let page = format!(
-        "<!doctype html><html><head><meta charset=utf-8><title>Statement imported</title>\
+        "<!doctype html><html><head><meta charset=utf-8><title>{title}</title>\
         <style>body{{font-family:system-ui,sans-serif;max-width:680px;margin:2rem auto;padding:0 1rem;color:#222}}\
         a{{color:#2563eb}}li{{margin:4px 0}}</style></head><body>\
-        <p><a href=\"/app/accounts\">&larr; Chart of accounts</a></p><h1>Statement imported</h1>\
+        <p><a href=\"/app/accounts\">&larr; Chart of accounts</a></p><h1>{title}</h1>\
         <p>Parsed <strong>{fname}</strong> with AI:</p><ul>\
+        {tie_line}\
         <li><strong>{imported}</strong> new transaction(s) added</li>\
         <li><strong>{duplicates}</strong> duplicate(s) skipped (already in the ledger)</li>\
         <li><strong>{unparsed}</strong> line(s) ignored (no usable date/amount)</li></ul>\
         <p><a href=\"/app/transactions?account_id={acct}\">Review the account's transactions &rarr;</a></p>\
         </body></html>",
+        title = title,
         fname = esc_html(&fname),
+        tie_line = tie_line,
         imported = outcome.imported,
         duplicates = outcome.duplicates,
         unparsed = outcome.unparsed,
