@@ -343,8 +343,21 @@ pub fn schemas() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "reclassify_line",
+            "description": "Classify ONE transaction: move a single journal line (by line_id from list_transactions) to a different account — the per-transaction classification step of the bookkeeping loop. Typical use: after import_statement, list account 9999 Uncategorized and, for EACH line, decide the correct account evidence-first (address book → prior identical transaction → full memo/WebSearch → rules) and call this with the line_id and the target account. Event-sourced and reversible; the entry stays balanced because only the account pointer moves. Persist each new counterparty decision with set_address_label so it is never re-asked.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "line_id": {"type": "string", "description": "journal line id (from list_transactions)"},
+                    "account_number": {"type": "string", "description": "target account number, e.g. 5500"},
+                    "account_id": {"type": "string", "description": "target account id (alternative to account_number)"}
+                },
+                "required": ["line_id"]
+            }
+        }),
+        json!({
             "name": "import_statement",
-            "description": "THE deterministic per-transaction statement ingester — always use this (never hand-typed post_journal_entry calls) to get a bank/credit-card statement into the books. Server-side it extracts the FULL statement text (no truncation), parses every line plus the printed beginning/ending balances, verifies beginning + Σlines = ending TO THE PENNY, and only then posts one balanced entry per line: the statement account vs Uncategorized (9999), deduplicating on date+amount so overlapping uploads merge instead of duplicating. If the parse does not tie it REFUSES to post and nothing enters the ledger. Returns {parsed, imported, duplicates, unparsed, balances, parse_ties, posted, note}. Work one statement at a time in date order; afterwards classify the Uncategorized legs evidence-first. Card statements use the statement's own convention (charges positive, payments negative).",
+            "description": "THE deterministic per-transaction statement ingester — always use this (never hand-typed post_journal_entry calls) to get a bank/credit-card statement into the books. Server-side it extracts the FULL statement text (no truncation), parses every line plus the printed beginning/ending balances, verifies beginning + Σlines = ending TO THE PENNY, and only then posts one balanced entry per line: the statement account vs Uncategorized (9999), deduplicating on date+amount so overlapping uploads merge instead of duplicating. If the parse does not tie it REFUSES to post and nothing enters the ledger. Returns {parsed, imported, duplicates, unparsed, balances, parse_ties, posted, note}. Work one statement at a time in date order; afterwards classify the Uncategorized legs evidence-first. For a LIABILITY (credit-card) account the ledger receives textbook signs — a charge credits the card (its Uncategorized contra classifies as a positive-debit expense) and the card account's ledger balance equals MINUS the statement's owed balance. The two legs of a card payment (one from each statement) net to zero when both are reclassified to the same clearing account — never plug a clearing residual to equity; if it doesn't net, something is wrong: stop and say so.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -394,6 +407,7 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "list_documents" => list_documents_tool(ctx).await,
         "read_document" => read_document_tool(ctx, input).await,
         "import_statement" => import_statement_tool(ctx, input).await,
+        "reclassify_line" => reclassify_line_tool(ctx, input).await,
         "list_bank_connections" => list_bank_connections_tool(ctx).await,
         "navigate_to_page" => navigate_tool(input),
         // NOTE: "sync_bank" needs AppState (plaid config) and is handled by the
@@ -622,6 +636,40 @@ async fn read_document_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
         "truncated": truncated,
         "text": shown,
     })
+}
+
+/// Per-transaction classification: repoint one journal line at a different
+/// account (event-sourced reassign_line, tenant-guarded).
+async fn reclassify_line_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let Some(line_id) = input
+        .get("line_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return json!({ "error": "line_id must be a UUID (from list_transactions)" });
+    };
+    // Resolve the target account: by id, or by account_number within this company.
+    let target: Option<Uuid> = match input.get("account_id").and_then(|v| v.as_str()) {
+        Some(s) => Uuid::parse_str(s).ok(),
+        None => match input.get("account_number").and_then(|v| v.as_str()) {
+            Some(num) => match queries::list_accounts(ctx.pool, ctx.company_id).await {
+                Ok(accounts) => accounts.iter().find(|a| a.account_number == num).map(|a| a.id),
+                Err(e) => return json!({ "error": format!("{e}") }),
+            },
+            None => None,
+        },
+    };
+    let Some(new_account_id) = target else {
+        return json!({ "error": "provide account_number (e.g. \"5500\") or account_id; account not found in this company" });
+    };
+    match crate::commands::mutations::reassign_line(
+        ctx.pool, ctx.company_id, ctx.user_id, line_id, new_account_id,
+    )
+    .await
+    {
+        Ok(()) => json!({ "ok": true, "line_id": line_id, "moved_to_account_id": new_account_id }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
 }
 
 /// Deterministic statement ingestion for the agent: loads the stored file

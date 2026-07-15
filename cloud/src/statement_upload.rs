@@ -94,8 +94,28 @@ pub async fn import_statement_verified(
         );
         return Ok(report);
     }
+    // The parse (and its tie) uses the STATEMENT's own convention — for a credit card,
+    // charges positive / payments negative (balance = amount owed). The LEDGER must get
+    // textbook double-entry signs, which for a liability account are the NEGATION of the
+    // statement convention: a charge credits the card (−X) so its contra classifies as a
+    // positive-debit expense, and a payment debits the card (+X) so it nets against the
+    // checking-side transfer leg. Without this, card-side expenses post as negative
+    // credits and payment-clearing can never net to zero.
+    let account_type: Option<(String,)> =
+        sqlx::query_as("SELECT account_type FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("account lookup failed: {e}"))?;
+    let negate = matches!(account_type.as_ref().map(|(t,)| t.as_str()), Some("liability"));
+    let mut lines = stmt.transactions;
+    if negate {
+        for l in &mut lines {
+            l.amount_cents = -l.amount_cents;
+        }
+    }
     let (imported, duplicates, unparsed) =
-        post_lines(pool, company_id, user_id, account_id, file_name, stmt.transactions)
+        post_lines(pool, company_id, user_id, account_id, file_name, lines)
             .await
             .map_err(|e| format!("posting failed: {e}"))?;
     report.imported = imported;
@@ -107,6 +127,12 @@ pub async fn import_statement_verified(
         Some(false) => "FORCED despite a failed tie — verify this account against the statement manually".into(),
         None => "statement balances not printed; lines posted without a tie check — verify the account balance".into(),
     };
+    if negate {
+        report.note.push_str(
+            " [liability account: ledger amounts are the negation of the statement's owed-positive \
+             convention — the account's ledger balance equals MINUS the statement balance]",
+        );
+    }
     Ok(report)
 }
 
