@@ -159,11 +159,33 @@ async fn ensure_session_row(
 
 async fn spawn_proc(
     cfg: &Cfg,
+    pool: &PgPool,
     company_id: Uuid,
     session_id: Uuid,
     token: &str,
     resume: bool,
 ) -> anyhow::Result<AgentProc> {
+    // Owner-provided per-company accounting rules (Settings → "Accounting rules for the
+    // AI agent") are appended to the system prompt so every session follows them.
+    let rules: String = sqlx::query_scalar::<_, String>(
+        "SELECT accounting_rules FROM companies WHERE id = $1",
+    )
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+    let system_prompt = if rules.trim().is_empty() {
+        SYSTEM_PROMPT.to_string()
+    } else {
+        format!(
+            "{SYSTEM_PROMPT}\n\nCOMPANY ACCOUNTING RULES (set by the owner in Settings — follow them \
+             STRICTLY; they override generic conventions but never the double-entry/audit rules above; \
+             if a rule conflicts with the ledger's reality or another rule, say so instead of guessing):\n{}",
+            rules.trim()
+        )
+    };
     let cwd = cfg.state_dir.join(company_id.to_string());
     tokio::fs::create_dir_all(&cwd).await?;
     let mcp_path = cwd.join("mcp.json");
@@ -207,7 +229,7 @@ async fn spawn_proc(
         .arg("--tools")
         .arg("WebSearch")
         .arg("--system-prompt")
-        .arg(SYSTEM_PROMPT)
+        .arg(&system_prompt)
         .arg("--model")
         .arg(&cfg.model)
         .current_dir(&cwd)
@@ -318,7 +340,7 @@ async fn run_turn(
 
     if slot.is_none() {
         let (sid, tok, existing) = ensure_session_row(&d.pool, company_id).await?;
-        *slot = Some(spawn_proc(&d.cfg, company_id, sid, &tok, existing).await?);
+        *slot = Some(spawn_proc(&d.cfg, &d.pool, company_id, sid, &tok, existing).await?);
     }
 
     // Write the turn; if the idle child died since last use, respawn-resume once.
@@ -330,7 +352,7 @@ async fn run_turn(
             tracing::warn!(company = %company_id, "agent stdin closed; respawning with resume");
             *slot = None;
             let (sid, tok, _) = ensure_session_row(&d.pool, company_id).await?;
-            *slot = Some(spawn_proc(&d.cfg, company_id, sid, &tok, true).await?);
+            *slot = Some(spawn_proc(&d.cfg, &d.pool, company_id, sid, &tok, true).await?);
             let proc = slot.as_mut().unwrap();
             proc.stdin.write_all(line.as_bytes()).await?;
             proc.stdin.flush().await?;
@@ -382,7 +404,7 @@ async fn run_turn(
                     respawned = true;
                     *slot = None; // kill_on_drop reaps the wedged child
                     let (sid, tok, _) = ensure_session_row(&d.pool, company_id).await?;
-                    *slot = Some(spawn_proc(&d.cfg, company_id, sid, &tok, true).await?);
+                    *slot = Some(spawn_proc(&d.cfg, &d.pool, company_id, sid, &tok, true).await?);
                     let proc = slot.as_mut().unwrap();
                     proc.stdin.write_all(line.as_bytes()).await?;
                     proc.stdin.flush().await?;
@@ -408,7 +430,7 @@ async fn run_turn(
                         .await;
                     *slot = None;
                     let (sid, tok, _) = ensure_session_row(&d.pool, company_id).await?;
-                    *slot = Some(spawn_proc(&d.cfg, company_id, sid, &tok, false).await?);
+                    *slot = Some(spawn_proc(&d.cfg, &d.pool, company_id, sid, &tok, false).await?);
                     let proc = slot.as_mut().unwrap();
                     proc.stdin.write_all(line.as_bytes()).await?;
                     proc.stdin.flush().await?;
@@ -438,7 +460,7 @@ async fn run_turn(
                         respawned = true;
                         *slot = None;
                         let (sid, tok, _) = ensure_session_row(&d.pool, company_id).await?;
-                        *slot = Some(spawn_proc(&d.cfg, company_id, sid, &tok, true).await?);
+                        *slot = Some(spawn_proc(&d.cfg, &d.pool, company_id, sid, &tok, true).await?);
                         let proc = slot.as_mut().unwrap();
                         proc.stdin.write_all(line.as_bytes()).await?;
                         proc.stdin.flush().await?;

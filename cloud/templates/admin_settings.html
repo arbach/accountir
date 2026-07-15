@@ -24,6 +24,25 @@
 </form>
 </div>
 
+<div class="card" style="margin-top:16px;">
+<form method="post" action="/app/admin/settings/rules" class="stack-sm">
+  <label class="field">
+    <span class="label-text">Accounting rules for the AI agent</span>
+    <span class="muted" style="display:block;margin:2px 0 6px;">
+      Free-text rules the AI bookkeeper follows for this company — classification conventions,
+      entity-specific treatments, named counterparties, things it should never do. Plain English,
+      one rule per line works well. Applied to every new agent session.
+    </span>
+    <textarea name="accounting_rules" rows="14" style="width:100%;font-family:ui-monospace,monospace;font-size:13px;"
+      placeholder="e.g.&#10;- Transfers between our checking and our credit card are card payments, never income or expense.&#10;- Payments to Acme LLC are always contractor expense.&#10;- Money the owner takes out is a distribution, never salary or expense."
+      {% if !can_edit %}disabled{% endif %}>{{ accounting_rules }}</textarea>
+  </label>
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary" {% if !can_edit %}disabled{% endif %}>Save rules</button>
+  </div>
+</form>
+</div>
+
 <style>
 {% for f in sig_fonts %}
 @font-face { font-family: "sig-{{ f.0 }}"; src: url("/app/fonts/{{ f.0 }}.ttf") format("truetype"); font-display: swap; }

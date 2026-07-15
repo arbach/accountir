@@ -1990,6 +1990,29 @@ pub async fn get_company(pool: &PgPool, company_id: Uuid) -> AppResult<Option<(S
     Ok(row)
 }
 
+/// Owner-provided free-text accounting rules the AI agent must follow for this company.
+pub async fn get_accounting_rules(pool: &PgPool, company_id: Uuid) -> AppResult<String> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT accounting_rules FROM companies WHERE id = $1")
+            .bind(company_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(r,)| r).unwrap_or_default())
+}
+
+pub async fn update_accounting_rules(
+    pool: &PgPool,
+    company_id: Uuid,
+    rules: &str,
+) -> AppResult<()> {
+    sqlx::query("UPDATE companies SET accounting_rules = $1, updated_at = now() WHERE id = $2")
+        .bind(rules.trim())
+        .bind(company_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn remove_member(pool: &PgPool, company_id: Uuid, user_id: Uuid) -> AppResult<()> {
     // Prevent removing the last owner.
     let owner_count: (i64,) = sqlx::query_as(
