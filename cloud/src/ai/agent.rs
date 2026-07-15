@@ -43,8 +43,11 @@ pub async fn stream_turn_with_display(
         .await
         .map_err(|e| anyhow::anyhow!("store user msg: {e}"))?;
 
+    // Total-request timeout must exceed agentd's turn ceiling (AGENT_TURN_TIMEOUT_SECS,
+    // 2400s) or long bookkeeping turns get cut off mid-stream at this limit ("stream
+    // interrupted: error decoding response body"). Keep a margin above the daemon's own cap.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(620))
+        .timeout(std::time::Duration::from_secs(2700))
         .build()?;
     let mut resp = client
         .post(format!("{}/turn", agentd_url()))
