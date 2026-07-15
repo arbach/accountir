@@ -94,28 +94,8 @@ pub async fn import_statement_verified(
         );
         return Ok(report);
     }
-    // The parse (and its tie) uses the STATEMENT's own convention — for a credit card,
-    // charges positive / payments negative (balance = amount owed). The LEDGER must get
-    // textbook double-entry signs, which for a liability account are the NEGATION of the
-    // statement convention: a charge credits the card (−X) so its contra classifies as a
-    // positive-debit expense, and a payment debits the card (+X) so it nets against the
-    // checking-side transfer leg. Without this, card-side expenses post as negative
-    // credits and payment-clearing can never net to zero.
-    let account_type: Option<(String,)> =
-        sqlx::query_as("SELECT account_type FROM accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("account lookup failed: {e}"))?;
-    let negate = matches!(account_type.as_ref().map(|(t,)| t.as_str()), Some("liability"));
-    let mut lines = stmt.transactions;
-    if negate {
-        for l in &mut lines {
-            l.amount_cents = -l.amount_cents;
-        }
-    }
-    let (imported, duplicates, unparsed) =
-        post_lines(pool, company_id, user_id, account_id, file_name, lines)
+    let (imported, duplicates, unparsed, negate) =
+        post_lines(pool, company_id, user_id, account_id, file_name, stmt.transactions)
             .await
             .map_err(|e| format!("posting failed: {e}"))?;
     report.imported = imported;
@@ -156,7 +136,7 @@ pub async fn import_statement(
     let parsed = lines.len();
     post_lines(pool, company_id, user_id, account_id, file_name, lines)
         .await
-        .map(|(imported, duplicates, unparsed)| UploadOutcome { parsed, imported, duplicates, unparsed })
+        .map(|(imported, duplicates, unparsed, _)| UploadOutcome { parsed, imported, duplicates, unparsed })
         .map_err(|e| format!("posting failed: {e}"))
 }
 
@@ -164,28 +144,44 @@ pub async fn import_statement(
 /// on that account with the same date and amount as a duplicate. Counting is
 /// multiset-style: two legitimate identical transactions on the statement only
 /// dedupe against two existing ledger lines.
+///
+/// Lines arrive in the STATEMENT's own convention (verified against its printed
+/// balances). For a LIABILITY account (credit card: balance = amount owed) the ledger
+/// needs the NEGATION: a charge credits the card so its contra classifies as a
+/// positive-debit expense, and payment legs net to zero against the checking-side
+/// transfer. The account_type lookup MUST happen here, inside the set_tenant
+/// transaction — `accounts` is FORCE RLS, so a bare-pool lookup silently returns
+/// nothing and the negation never applies. Returns (imported, duplicates, unparsed,
+/// negated).
 async fn post_lines(
     pool: &sqlx::PgPool,
     company_id: Uuid,
     user_id: Uuid,
     account_id: Uuid,
     file_name: &str,
-    lines: Vec<ParsedLine>,
-) -> AppResult<(u32, u32, u32)> {
+    mut lines: Vec<ParsedLine>,
+) -> AppResult<(u32, u32, u32, bool)> {
     let mut conn = pool.acquire().await?;
     let mut tx = conn.begin().await?;
     set_tenant(&mut tx, company_id).await?;
 
     // RLS scopes this lookup to the company, so it doubles as an ownership check.
-    let acct: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT currency FROM accounts WHERE id = $1 AND is_active = true")
-            .bind(account_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let Some((currency,)) = acct else {
+    let acct: Option<(Option<String>, String)> = sqlx::query_as(
+        "SELECT currency, account_type FROM accounts WHERE id = $1 AND is_active = true",
+    )
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((currency, account_type)) = acct else {
         return Err(crate::error::AppError::NotFound);
     };
     let currency = currency.unwrap_or_else(|| "USD".to_string());
+    let negate = account_type == "liability";
+    if negate {
+        for l in &mut lines {
+            l.amount_cents = -l.amount_cents;
+        }
+    }
 
     let existing: Vec<(NaiveDate, i64, i64)> = sqlx::query_as(
         r#"
@@ -252,5 +248,5 @@ async fn post_lines(
         imported += 1;
     }
     tx.commit().await?;
-    Ok((imported, duplicates, unparsed))
+    Ok((imported, duplicates, unparsed, negate))
 }
