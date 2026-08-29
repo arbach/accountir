@@ -1,6 +1,7 @@
 use accountir_core::events::payload::compute_event_hash;
 use accountir_core::events::types::Event;
-use chrono::{DateTime, Utc};
+use accountir_core::events::validation::validate_event;
+use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -15,6 +16,8 @@ pub enum StoreError {
     Database(#[from] sqlx::Error),
     #[error("payload error: {0}")]
     Payload(String),
+    #[error("{0}")]
+    PeriodClosed(String),
 }
 
 impl From<StoreError> for AppError {
@@ -23,6 +26,7 @@ impl From<StoreError> for AppError {
             StoreError::DuplicateHash => AppError::Conflict("duplicate event".into()),
             StoreError::Database(e) => AppError::Database(e),
             StoreError::Payload(m) => AppError::Internal(anyhow::anyhow!(m)),
+            StoreError::PeriodClosed(m) => AppError::Conflict(m),
         }
     }
 }
@@ -46,6 +50,45 @@ pub async fn append_event<'a>(
                 "only USD is supported; got line currency '{}'",
                 bad.currency
             )));
+        }
+    }
+
+    // Domain validation for EVERY event at the choke point (balance, ≥2 lines,
+    // duplicate line ids, non-empty fields). Individual callers validate too,
+    // but the imports historically did not — this closes that gap for good.
+    validate_event(event).map_err(|e| StoreError::Payload(format!("invalid event: {e}")))?;
+
+    // Period locking: financial mutations touching a date on or before the
+    // company's books_closed_through are rejected. Covers posting, void,
+    // unvoid, and line reassignment (memo edits are non-financial and allowed).
+    let affected_date: Option<NaiveDate> = match event {
+        Event::JournalEntryPosted { date, .. } => Some(*date),
+        Event::JournalEntryVoided { entry_id, .. }
+        | Event::JournalEntryUnvoided { entry_id, .. }
+        | Event::JournalLineReassigned { entry_id, .. } => {
+            let id = Uuid::parse_str(entry_id)
+                .map_err(|e| StoreError::Payload(format!("entry_id not uuid: {e}")))?;
+            sqlx::query_scalar("SELECT date FROM journal_entries WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&mut **tx)
+                .await?
+        }
+        _ => None,
+    };
+    if let Some(d) = affected_date {
+        let closed: Option<NaiveDate> = sqlx::query_scalar::<_, Option<NaiveDate>>(
+            "SELECT books_closed_through FROM companies WHERE id = $1",
+        )
+        .bind(company_id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .flatten();
+        if let Some(closed_through) = closed {
+            if d <= closed_through {
+                return Err(StoreError::PeriodClosed(format!(
+                    "books are closed through {closed_through}; an entry dated {d} cannot be posted or modified. Reopen the period in Settings first."
+                )));
+            }
         }
     }
     let timestamp: DateTime<Utc> = Utc::now();

@@ -62,6 +62,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/admin/members/{user_id}/role", post(admin_member_role))
         .route("/app/admin/settings", get(admin_settings_view).post(admin_settings_save))
         .route("/app/admin/settings/rules", post(admin_rules_save))
+        .route("/app/admin/settings/close-books", post(admin_close_books_save))
         .route("/app/admin/signature/typed", post(signature_save_typed))
         .route(
             "/app/admin/signature/upload",
@@ -276,6 +277,7 @@ struct AdminSettingsTpl {
     base_currency: String,
     fiscal_year_start_month: i16,
     accounting_rules: String,
+    books_closed_through: String,
     can_edit: bool,
     all_companies: Vec<queries::CompanyRow>,
     active_company_id: String,
@@ -1792,6 +1794,12 @@ async fn admin_settings_view(State(state): State<AppState>, jar: CookieJar) -> R
     let accounting_rules = queries::get_accounting_rules(&state.pool, company_id)
         .await
         .unwrap_or_default();
+    let books_closed_through = queries::get_books_closed_through(&state.pool, company_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
     render(AdminSettingsTpl {
         user_email: Some(user.email),
         flash: None,
@@ -1802,6 +1810,7 @@ async fn admin_settings_view(State(state): State<AppState>, jar: CookieJar) -> R
         base_currency,
         fiscal_year_start_month: fysm,
         accounting_rules,
+        books_closed_through,
         can_edit,
         all_companies: all,
         active_company_id: active_id,
@@ -1838,6 +1847,35 @@ async fn admin_settings_save(
     let role = queries::user_role_in(&state.pool, user.id, company_id).await.ok().flatten().unwrap_or_default();
     if !queries::role_can_admin(&role) { return forbidden(); }
     let _ = queries::update_company_settings(&state.pool, company_id, &req.name, &req.base_currency, req.fiscal_year_start_month).await;
+    Redirect::to("/app/admin/settings").into_response()
+}
+
+#[derive(Deserialize)]
+struct CloseBooksForm {
+    books_closed_through: String,
+}
+
+/// POST /app/admin/settings/close-books — set (or clear, with an empty date)
+/// the period lock: entries dated on or before this date are immutable.
+async fn admin_close_books_save(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Form(req): Form<CloseBooksForm>,
+) -> Response {
+    let user = match require_user(&state, &jar).await { Ok(u) => u, Err(r) => return r };
+    let company_id = match active_company(&state, &jar, user.id).await { Some(c) => c, None => return forbidden() };
+    let role = queries::user_role_in(&state.pool, user.id, company_id).await.ok().flatten().unwrap_or_default();
+    if !queries::role_can_admin(&role) { return forbidden(); }
+    let date = match req.books_closed_through.trim() {
+        "" => None,
+        s => match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            Ok(d) => Some(d),
+            Err(_) => return (axum::http::StatusCode::BAD_REQUEST, "invalid date").into_response(),
+        },
+    };
+    if queries::set_books_closed_through(&state.pool, company_id, date).await.is_err() {
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "failed to save period lock").into_response();
+    }
     Redirect::to("/app/admin/settings").into_response()
 }
 
@@ -4325,6 +4363,7 @@ async fn report_balance_sheet(
             liabilities: vec![],
             equity: vec![],
             net_income_cents: 0,
+            retained_earnings_cents: 0,
             total_assets_cents: 0,
             total_liab_cents: 0,
             total_equity_cents: 0,

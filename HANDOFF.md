@@ -83,7 +83,12 @@ sudo systemctl restart accountir accountir-cloud accountir-agentd
 9. Recreate the Caddy site; point `apix.us` DNS at the new host.
 10. Smoke test: login, a Plaid link flow (sandbox), an agent session.
 
-## 9. Gotchas
+## 9. Backups
+Nightly 03:30 via `accountir-backup.timer` → S3 `s3://accountir-backups-458221229419/nightly/`
+(Postgres dump + SQLite snapshot + `/etc` env files; 90-day S3 / 7-day local retention).
+Sources in `ops/backup/`, full docs + restore procedure in **`docs/BACKUPS.md`**.
+
+## 10. Gotchas
 - **Two databases, two engines** (Postgres for cloud, SQLite for the sync ledger) — migrate both.
 - `accountir-agentd` shells out to the **Claude CLI** as the runtime user — that user must be logged into Claude on the new host.
 - `PLAID_TOKEN_ENC_KEY` is load-bearing for all bank connections.

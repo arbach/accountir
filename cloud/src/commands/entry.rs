@@ -73,6 +73,25 @@ pub async fn post_entry_in_tx<'a>(
         )));
     }
 
+    // Every line account must exist and be active in THIS tenant. The FK alone
+    // is satisfied by another tenant's account (FK checks bypass RLS), and
+    // reports join accounts under RLS — a foreign account id would make the
+    // leg silently vanish from every report while the entry "balances".
+    let mut account_ids: Vec<Uuid> = input.lines.iter().map(|l| l.account_id).collect();
+    account_ids.sort();
+    account_ids.dedup();
+    let known: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM accounts WHERE id = ANY($1) AND is_active = true",
+    )
+    .bind(&account_ids)
+    .fetch_one(&mut **tx)
+    .await?;
+    if known as usize != account_ids.len() {
+        return Err(AppError::BadRequest(
+            "entry references an unknown or inactive account".into(),
+        ));
+    }
+
     let entry_id = Uuid::new_v4();
     let lines: Vec<JournalLineData> = input
         .lines

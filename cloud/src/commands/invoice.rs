@@ -148,7 +148,7 @@ pub async fn issue_invoice(
 
     let inv: Option<(String, String, NaiveDate, i64, i64, i64)> = sqlx::query_as(
         "SELECT status::text, invoice_number, issue_date, subtotal_cents, tax_cents, total_cents
-         FROM invoices WHERE id = $1",
+         FROM invoices WHERE id = $1 FOR UPDATE",
     )
     .bind(invoice_id)
     .fetch_optional(&mut *tx)
@@ -264,7 +264,7 @@ pub async fn record_payment(
 
     let inv: Option<(String, String, i64, i64)> = sqlx::query_as(
         "SELECT status::text, invoice_number, total_cents, paid_cents
-         FROM invoices WHERE id = $1",
+         FROM invoices WHERE id = $1 FOR UPDATE",
     )
     .bind(invoice_id)
     .fetch_optional(&mut *tx)
@@ -366,15 +366,29 @@ pub async fn void_invoice(
     let mut tx = conn.begin().await?;
     set_tenant(&mut tx, company_id).await?;
 
-    let row: Option<(String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT status::text, posted_entry_id FROM invoices WHERE id = $1",
+    let row: Option<(String, Option<Uuid>, i64)> = sqlx::query_as(
+        "SELECT status::text, posted_entry_id, paid_cents FROM invoices WHERE id = $1 FOR UPDATE",
     )
     .bind(invoice_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (status, posted) = row.ok_or(AppError::NotFound)?;
+    let (status, posted, paid_cents) = row.ok_or(AppError::NotFound)?;
     if status == "void" {
         return Ok(());
+    }
+    // An invoice with recorded payments cannot simply be voided: voiding only
+    // the issue entry would leave the payments' CR-AR legs behind and drive
+    // A/R negative while cash still shows the money. Payments must be dealt
+    // with first (or issue a credit note).
+    let payment_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM invoice_payments WHERE invoice_id = $1")
+            .bind(invoice_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if paid_cents > 0 || payment_count > 0 {
+        return Err(AppError::Conflict(
+            "invoice has recorded payments and cannot be voided; remove or reverse the payments first, or issue a credit note".into(),
+        ));
     }
     if let Some(entry_id) = posted {
         let _ = crate::commands::mutations::void_entry_in_tx(

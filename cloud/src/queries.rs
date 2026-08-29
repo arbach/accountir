@@ -562,12 +562,22 @@ async fn sum_by_account_type(
 
 pub async fn dashboard_kpis(pool: &PgPool, company_id: Uuid) -> AppResult<DashboardKpis> {
     let today = chrono::Utc::now().date_naive();
-    let year_start = NaiveDate::from_ymd_opt(today.year_ce().1 as i32, 1, 1).unwrap();
     let month_start = NaiveDate::from_ymd_opt(today.year_ce().1 as i32, today.month0() + 1, 1).unwrap();
 
     let mut conn = pool.acquire().await?;
     let mut tx = conn.begin().await?;
     set_tenant(&mut tx, company_id).await?;
+
+    // Fiscal-year-aware YTD window (companies.fiscal_year_start_month, default 1).
+    let fy_month: i16 =
+        sqlx::query_scalar("SELECT fiscal_year_start_month FROM companies WHERE id = $1")
+            .bind(company_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .unwrap_or(1);
+    let fy_month = fy_month.clamp(1, 12) as u32;
+    let fy_year = if today.month() >= fy_month { today.year() } else { today.year() - 1 };
+    let year_start = NaiveDate::from_ymd_opt(fy_year, fy_month, 1).unwrap();
 
     // All-time balances per type for asset/liability/equity (positive amounts = debit-normal).
     // Convention: assets/expenses are debit-normal so balance = sum(amount).
@@ -575,7 +585,11 @@ pub async fn dashboard_kpis(pool: &PgPool, company_id: Uuid) -> AppResult<Dashbo
     let all_time = sum_by_account_type(&mut tx, None, None).await?;
     let assets = *all_time.get("asset").unwrap_or(&0);
     let liabs = -*all_time.get("liability").unwrap_or(&0);
-    let equity = -*all_time.get("equity").unwrap_or(&0);
+    // Equity must include cumulative earnings (there is no closing-entry roll),
+    // otherwise assets − liabilities never equals the displayed equity.
+    let earnings_all_time = -all_time.get("revenue").copied().unwrap_or(0)
+        - all_time.get("expense").copied().unwrap_or(0);
+    let equity = -*all_time.get("equity").unwrap_or(&0) + earnings_all_time;
 
     // YTD net income = -(revenue + expense) where revenue is credit-normal and expense is debit-normal.
     // Net income increases equity, so positive net income = -sum(rev) - sum(exp) inverted:
@@ -737,6 +751,10 @@ pub struct BalanceSheet {
     pub liabilities: Vec<ReportLine>,
     pub equity: Vec<ReportLine>,
     pub net_income_cents: i64,
+    /// Cumulative net income from inception through the end of the PRIOR
+    /// fiscal year — prior years' P&L that never got a closing entry. Shown as
+    /// its own equity line so multi-year balance sheets actually balance.
+    pub retained_earnings_cents: i64,
     pub total_assets_cents: i64,
     pub total_liab_cents: i64,
     pub total_equity_cents: i64,
@@ -744,13 +762,14 @@ pub struct BalanceSheet {
 impl BalanceSheet {
     pub fn total_assets_display(&self) -> String { format_cents(self.total_assets_cents) }
     pub fn total_liab_display(&self) -> String { format_cents(self.total_liab_cents) }
-    // "Total equity" must include current-year net income (shown as its own line
-    // just above), so it ties to the equity section and to Total liab. + equity.
+    // "Total equity" must include retained earnings and current-year net income
+    // (each shown as its own line above), so it ties to Total liab. + equity.
     pub fn total_equity_display(&self) -> String {
-        format_cents(self.total_equity_cents + self.net_income_cents)
+        format_cents(self.total_equity_cents + self.retained_earnings_cents + self.net_income_cents)
     }
     pub fn net_income_display(&self) -> String { format_cents(self.net_income_cents) }
-    pub fn liab_plus_equity_cents(&self) -> i64 { self.total_liab_cents + self.total_equity_cents + self.net_income_cents }
+    pub fn retained_earnings_display(&self) -> String { format_cents(self.retained_earnings_cents) }
+    pub fn liab_plus_equity_cents(&self) -> i64 { self.total_liab_cents + self.total_equity_cents + self.retained_earnings_cents + self.net_income_cents }
     pub fn liab_plus_equity_display(&self) -> String { format_cents(self.liab_plus_equity_cents()) }
     pub fn balance_class(&self) -> &'static str {
         if self.total_assets_cents == self.liab_plus_equity_cents() { "ok" } else { "err" }
@@ -788,9 +807,18 @@ pub async fn balance_sheet(pool: &PgPool, company_id: Uuid, as_of: NaiveDate) ->
     .fetch_all(&mut *tx)
     .await?;
 
-    // Net income up through as_of for current calendar year.
-    let year = as_of.format("%Y").to_string().parse::<i32>().unwrap_or(2026);
-    let year_start = NaiveDate::from_ymd_opt(year, 1, 1).unwrap();
+    // Fiscal-year start (companies.fiscal_year_start_month, default 1 = calendar).
+    let fy_month: i16 =
+        sqlx::query_scalar("SELECT fiscal_year_start_month FROM companies WHERE id = $1")
+            .bind(company_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .unwrap_or(1);
+    let fy_month = fy_month.clamp(1, 12) as u32;
+    let fy_year = if as_of.month() >= fy_month { as_of.year() } else { as_of.year() - 1 };
+    let fy_start = NaiveDate::from_ymd_opt(fy_year, fy_month, 1).unwrap();
+
+    // Net income for the current fiscal year up through as_of.
     let ni_row: (i64, i64) = sqlx::query_as(
         r#"
         SELECT
@@ -802,11 +830,29 @@ pub async fn balance_sheet(pool: &PgPool, company_id: Uuid, as_of: NaiveDate) ->
         WHERE je.date BETWEEN $1 AND $2
         "#,
     )
-    .bind(year_start)
+    .bind(fy_start)
     .bind(as_of)
     .fetch_one(&mut *tx)
     .await?;
     let net_income = ni_row.0 - ni_row.1;
+
+    // Retained earnings: all prior fiscal years' net income, never closed to
+    // equity by an entry, computed dynamically so the sheet balances.
+    let re_row: (i64, i64) = sqlx::query_as(
+        r#"
+        SELECT
+            COALESCE(SUM(CASE WHEN a.account_type = 'revenue' THEN -jl.amount ELSE 0 END), 0)::BIGINT,
+            COALESCE(SUM(CASE WHEN a.account_type = 'expense' THEN jl.amount ELSE 0 END), 0)::BIGINT
+        FROM journal_lines jl
+        JOIN accounts a ON a.id = jl.account_id
+        JOIN journal_entries je ON je.id = jl.entry_id AND je.is_void = false
+        WHERE je.date < $1
+        "#,
+    )
+    .bind(fy_start)
+    .fetch_one(&mut *tx)
+    .await?;
+    let retained_earnings = re_row.0 - re_row.1;
     tx.commit().await?;
 
     let mut assets = Vec::new();
@@ -843,6 +889,7 @@ pub async fn balance_sheet(pool: &PgPool, company_id: Uuid, as_of: NaiveDate) ->
         liabilities,
         equity,
         net_income_cents: net_income,
+        retained_earnings_cents: retained_earnings,
         total_assets_cents: total_assets,
         total_liab_cents: total_liab,
         total_equity_cents: total_equity,
@@ -2011,6 +2058,33 @@ pub async fn update_company_settings(
     .bind(company_id)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// Period lock: entries dated on or before this are immutable (see event_store).
+pub async fn get_books_closed_through(
+    pool: &PgPool,
+    company_id: Uuid,
+) -> AppResult<Option<NaiveDate>> {
+    let v: Option<Option<NaiveDate>> = sqlx::query_scalar(
+        "SELECT books_closed_through FROM companies WHERE id = $1",
+    )
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(v.flatten())
+}
+
+pub async fn set_books_closed_through(
+    pool: &PgPool,
+    company_id: Uuid,
+    date: Option<NaiveDate>,
+) -> AppResult<()> {
+    sqlx::query("UPDATE companies SET books_closed_through = $1, updated_at = now() WHERE id = $2")
+        .bind(date)
+        .bind(company_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

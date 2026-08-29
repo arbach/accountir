@@ -24,6 +24,22 @@
 </form>
 </div>
 
+<div class="card form-narrow" style="margin-top:16px;">
+<form method="post" action="/app/admin/settings/close-books" class="stack-sm">
+  <label class="field">
+    <span class="label-text">Books closed through</span>
+    <span class="muted" style="display:block;margin:2px 0 6px;">
+      Entries dated on or before this date are locked — nothing can be posted,
+      voided, or reclassified into a closed period (by anyone, including the AI
+      agent). Set it after filing a year; clear it to reopen.
+    </span>
+    <input type="date" name="books_closed_through" value="{{ books_closed_through }}" {% if !can_edit %}disabled{% endif %}></label>
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary" {% if !can_edit %}disabled{% endif %}>Save period lock</button>
+  </div>
+</form>
+</div>
+
 <div class="card" style="margin-top:16px;">
 <form method="post" action="/app/admin/settings/rules" class="stack-sm">
   <label class="field">

@@ -1,0 +1,10 @@
+[Unit]
+Description=Accountir nightly backup (Postgres + SQLite + config to S3)
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/accountir-backup.sh
+Nice=10
+IOSchedulingClass=idle

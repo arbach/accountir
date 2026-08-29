@@ -63,6 +63,7 @@
         <tr><td><a href="/app/transactions?account_id={{ r.account_id }}&end={{ report.as_of }}" title="See the transactions behind this number">{{ r.account_number }} &nbsp; {{ r.name }}</a></td><td class="num"><a href="/app/transactions?account_id={{ r.account_id }}&end={{ report.as_of }}" title="See the transactions behind this number">{{ r.amount_display() }}</a></td></tr>
         {% endfor %}
       {% endif %}
+      <tr><td>Retained earnings (prior years)</td><td class="num">{{ report.retained_earnings_display() }}</td></tr>
       <tr><td>Current year net income</td><td class="num">{{ report.net_income_display() }}</td></tr>
       <tr><td>Total equity</td><td class="num">{{ report.total_equity_display() }}</td></tr>
     </tbody>
