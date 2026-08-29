@@ -352,6 +352,9 @@ struct TransactionsTpl {
     min_amount_str: String,
     max_amount_str: String,
     selected_sort: String,
+    /// The AI search box's query (echoed back), and how it was interpreted.
+    ai_query: String,
+    ai_note: Option<String>,
 }
 
 #[derive(Template)]
@@ -2040,6 +2043,8 @@ async fn admin_member_add(
         Some(c) => c,
         None => return forbidden(),
     };
+    let role = queries::user_role_in(&state.pool, user.id, company_id).await.ok().flatten().unwrap_or_default();
+    if !queries::role_can_admin(&role) { return forbidden(); }
     let _ = queries::add_member_by_email(&state.pool, company_id, &req.email, &req.role).await;
     Redirect::to("/app/admin/members").into_response()
 }
@@ -2646,6 +2651,8 @@ struct TxFilterQuery {
     sort: Option<String>,
     vendor: Option<String>,
     category: Option<String>,
+    /// Natural-language AI search — translated into the structured filters above.
+    ai: Option<String>,
 }
 
 /// Prefix the address-book name in front of any known 0x… wallet address in a
@@ -2684,6 +2691,15 @@ fn parse_filter_amount_cents(s: &str) -> Option<i64> {
     parse_amount_cents(&cleaned)
 }
 
+/// Render cents back into the min/max filter boxes ("100", "99.50").
+fn fmt_filter_amount(cents: i64) -> String {
+    if cents % 100 == 0 {
+        format!("{}", cents / 100)
+    } else {
+        format!("{:.2}", cents as f64 / 100.0)
+    }
+}
+
 async fn transactions_list(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -2697,29 +2713,75 @@ async fn transactions_list(
         Some(c) => c,
         None => return forbidden(),
     };
-    let start = q.start.as_deref().and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-    let end = q.end.as_deref().and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-    let account_ids: Vec<Uuid> = q
+    let mut start = q.start.as_deref().and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let mut end = q.end.as_deref().and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let mut account_ids: Vec<Uuid> = q
         .account_id
         .iter()
         .filter(|s| !s.is_empty())
         .filter_map(|s| Uuid::parse_str(s).ok())
         .collect();
-    let source = q.source.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
-    let search = q.search.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
-    let direction = q
+    let mut source = q.source.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
+    let mut search = q.search.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
+    let mut direction = q
         .direction
         .as_deref()
         .filter(|s| *s == "debit" || *s == "credit")
         .map(str::to_string);
-    let min_cents = q.min_amount.as_deref().and_then(parse_filter_amount_cents);
-    let max_cents = q.max_amount.as_deref().and_then(parse_filter_amount_cents);
-    let sort = match q.sort.as_deref() {
+    let mut min_cents = q.min_amount.as_deref().and_then(parse_filter_amount_cents);
+    let mut max_cents = q.max_amount.as_deref().and_then(parse_filter_amount_cents);
+    let mut sort = match q.sort.as_deref() {
         Some(s @ ("date_asc" | "amount_desc" | "amount_asc")) => s.to_string(),
         _ => "date_desc".to_string(),
     };
-    let vendor = q.vendor.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
-    let category = q.category.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
+    let mut vendor = q.vendor.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
+    let mut category = q.category.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
+    let mut min_amount_str = q.min_amount.clone().unwrap_or_default();
+    let mut max_amount_str = q.max_amount.clone().unwrap_or_default();
+
+    // Loaded before the AI translation so the model can ground on them.
+    let accounts = queries::list_accounts(&state.pool, company_id).await.unwrap_or_default();
+    let categories = queries::list_entry_categories(&state.pool, company_id).await.unwrap_or_default();
+
+    // AI search: translate the free-text query into the structured filters
+    // above (replacing them), then run the normal deterministic query. The
+    // page renders with the derived filters visible so they can be refined.
+    let ai_query = q.ai.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let mut ai_note: Option<String> = None;
+    if let Some(aiq) = &ai_query {
+        let vendors = queries::list_vendor_names(&state.pool, company_id, 80)
+            .await
+            .unwrap_or_default();
+        let today = chrono::Utc::now().date_naive();
+        match crate::ai::nl_search::translate(aiq, today, &accounts, &categories, &vendors).await {
+            Ok(f) => {
+                start = f.start;
+                end = f.end;
+                account_ids = f.account_ids;
+                source = f.source;
+                direction = f.direction;
+                min_cents = f.min_cents;
+                max_cents = f.max_cents;
+                min_amount_str = f.min_cents.map(fmt_filter_amount).unwrap_or_default();
+                max_amount_str = f.max_cents.map(fmt_filter_amount).unwrap_or_default();
+                search = (!f.keywords.is_empty()).then(|| f.keywords.join(" | "));
+                vendor = f.vendor;
+                category = f.category;
+                if let Some(s) = f.sort {
+                    sort = s;
+                }
+                ai_note = Some(f.note);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "ai transaction search failed; plain keyword fallback");
+                search = Some(aiq.clone());
+                ai_note = Some(
+                    "AI search is unavailable right now — ran a plain keyword search instead."
+                        .to_string(),
+                );
+            }
+        }
+    }
     let filter = queries::TransactionFilter {
         start, end,
         account_ids: account_ids.clone(),
@@ -2749,8 +2811,6 @@ async fn transactions_list(
             r.memo_display = relabel_wallets(&r.memo, &labels);
         }
     }
-    let accounts = queries::list_accounts(&state.pool, company_id).await.unwrap_or_default();
-    let categories = queries::list_entry_categories(&state.pool, company_id).await.unwrap_or_default();
     render(TransactionsTpl {
         user_email: Some(user.email),
         flash: None,
@@ -2767,9 +2827,11 @@ async fn transactions_list(
         start_str: start.map(|d| d.to_string()).unwrap_or_default(),
         end_str: end.map(|d| d.to_string()).unwrap_or_default(),
         selected_type: direction,
-        min_amount_str: q.min_amount.unwrap_or_default(),
-        max_amount_str: q.max_amount.unwrap_or_default(),
+        min_amount_str,
+        max_amount_str,
         selected_sort: sort,
+        ai_query: ai_query.unwrap_or_default(),
+        ai_note,
     })
 }
 

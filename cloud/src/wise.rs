@@ -19,7 +19,14 @@ pub struct WiseClient {
 
 impl WiseClient {
     pub fn new(token: &str) -> Self {
-        Self { token: token.to_string(), http: reqwest::Client::new() }
+        Self {
+            token: token.to_string(),
+            // Wise can hang on large exports — bound every call.
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_default(),
+        }
     }
 
     async fn get(&self, path: &str) -> Result<Value, String> {

@@ -166,8 +166,9 @@ async fn post_lines(
     set_tenant(&mut tx, company_id).await?;
 
     // RLS scopes this lookup to the company, so it doubles as an ownership check.
+    // account_type is a Postgres enum — cast to text or sqlx fails to decode it as String.
     let acct: Option<(Option<String>, String)> = sqlx::query_as(
-        "SELECT currency, account_type FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT currency, account_type::text FROM accounts WHERE id = $1 AND is_active = true",
     )
     .bind(account_id)
     .fetch_optional(&mut *tx)

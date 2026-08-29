@@ -162,11 +162,20 @@ pub async fn prepare_return(
             }
         };
         // locate the form row (must have been fetched/registered)
-        let row = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM tax_forms WHERE company_id=$1 AND form_code=$2 AND year=$3 ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(company_id).bind(&f.code).bind(year)
-        .fetch_optional(pool).await?;
+        // tax_forms is FORCE-RLS: a bare-pool read fails closed (always None),
+        // so this lookup must run inside a tenant transaction.
+        let row = {
+            let mut conn = pool.acquire().await?;
+            let mut tx = sqlx::Acquire::begin(&mut conn).await?;
+            crate::store::event_store::set_tenant(&mut tx, company_id).await?;
+            let row = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM tax_forms WHERE company_id=$1 AND form_code=$2 AND year=$3 ORDER BY created_at DESC LIMIT 1",
+            )
+            .bind(company_id).bind(&f.code).bind(year)
+            .fetch_optional(&mut *tx).await?;
+            tx.commit().await?;
+            row
+        };
         let Some(id) = row else {
             out.push(PreparedForm { form_code: f.code.clone(), filled: false, all_ok: false, issues: vec!["form not fetched yet".into()] });
             continue;

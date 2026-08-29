@@ -31,7 +31,10 @@ impl EmailClient {
         Self {
             api_key,
             from_address,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_default(),
         }
     }
 

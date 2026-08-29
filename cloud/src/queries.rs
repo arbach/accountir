@@ -1042,6 +1042,20 @@ pub async fn list_transactions(
         _ => "je.date DESC, je.id DESC, jl.amount DESC",
     };
 
+    // "|" separates OR-matched search terms ("github | adobe | aws") — used by
+    // the AI search's keyword expansion, and available to users directly.
+    let search_terms: Vec<String> = filter
+        .search
+        .as_deref()
+        .map(|s| {
+            s.split('|')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
     // When no specific account is picked we show only the asset/liability "bank side"
     // of each entry — otherwise every Plaid transaction shows up twice (bank line +
     // Uncategorized counterpart). Filtering by a specific account always wins.
@@ -1065,21 +1079,23 @@ pub async fn list_transactions(
           AND (cardinality($3::uuid[]) > 0 OR $10::text IS NOT NULL OR a.account_type IN ('asset', 'liability'))
           AND ($4::text IS NULL OR je.source::text = $4)
           -- Keyword search across the memo, reference, category, and any line's
-          -- account (name/number) or vendor. EXISTS keeps it at the entry level
-          -- so matches on a non-bank line still show the (bank-side) row once.
-          AND ($5::text IS NULL OR (
-                 je.memo ILIKE '%' || $5 || '%'
-              OR je.reference ILIKE '%' || $5 || '%'
-              OR ec.category ILIKE '%' || $5 || '%'
-              OR EXISTS (
-                   SELECT 1 FROM journal_lines jl2
-                   JOIN accounts a2 ON a2.id = jl2.account_id
-                   LEFT JOIN vendors v2 ON v2.id = jl2.vendor_id
-                   WHERE jl2.entry_id = je.id
-                     AND (a2.name ILIKE '%' || $5 || '%'
-                       OR a2.account_number ILIKE '%' || $5 || '%'
-                       OR v2.name ILIKE '%' || $5 || '%')
-                 )
+          -- account (name/number) or vendor. Multiple "|"-separated terms are
+          -- OR-matched. EXISTS keeps it at the entry level so matches on a
+          -- non-bank line still show the (bank-side) row once.
+          AND (cardinality($5::text[]) = 0 OR EXISTS (
+                 SELECT 1 FROM unnest($5::text[]) AS kw
+                 WHERE je.memo ILIKE '%' || kw || '%'
+                    OR je.reference ILIKE '%' || kw || '%'
+                    OR ec.category ILIKE '%' || kw || '%'
+                    OR EXISTS (
+                         SELECT 1 FROM journal_lines jl2
+                         JOIN accounts a2 ON a2.id = jl2.account_id
+                         LEFT JOIN vendors v2 ON v2.id = jl2.vendor_id
+                         WHERE jl2.entry_id = je.id
+                           AND (a2.name ILIKE '%' || kw || '%'
+                             OR a2.account_number ILIKE '%' || kw || '%'
+                             OR v2.name ILIKE '%' || kw || '%')
+                    )
           ))
           AND ($6::boolean = true OR je.is_void = false)
           AND ($7::text IS NULL
@@ -1097,7 +1113,7 @@ pub async fn list_transactions(
     .bind(filter.end)
     .bind(&filter.account_ids)
     .bind(filter.source.as_deref())
-    .bind(filter.search.as_deref())
+    .bind(&search_terms)
     .bind(filter.include_void)
     .bind(filter.direction.as_deref())
     .bind(filter.min_cents)
@@ -1171,6 +1187,24 @@ pub async fn list_entry_categories(pool: &PgPool, company_id: Uuid) -> AppResult
         "SELECT DISTINCT category FROM entry_categories WHERE company_id = $1 ORDER BY category",
     )
     .bind(company_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}
+
+/// Distinct vendor names actually tagged on this company's journal lines (the
+/// vendors master itself is global). Used to ground the AI transaction search.
+pub async fn list_vendor_names(pool: &PgPool, company_id: Uuid, limit: i64) -> AppResult<Vec<String>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT v.name FROM vendors v
+         JOIN journal_lines jl ON jl.vendor_id = v.id
+         ORDER BY v.name LIMIT $1",
+    )
+    .bind(limit)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;

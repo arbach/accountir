@@ -14,6 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
@@ -51,27 +52,47 @@ struct Claims {
     request_body_sha256: String,
 }
 
-/// Process-wide cache of Plaid JWKs keyed by `kid`. Plaid keys are stable and
-/// rotate rarely; caching bounds outbound calls to one per distinct kid and
-/// removes the per-request amplification a flood of forged webhooks would cause.
-fn key_cache() -> &'static Mutex<HashMap<String, Value>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
+/// Positive cache lifetime for a fetched JWK (Plaid keys rotate rarely).
+const KEY_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Negative cache lifetime for a kid Plaid didn't recognize — bounds the
+/// outbound-call amplification of a flood of forged webhooks with random kids.
+const MISS_TTL: Duration = Duration::from_secs(10 * 60);
+/// Hard cap on cached entries; forged kids beyond this evict the oldest.
+const MAX_ENTRIES: usize = 64;
+
+/// Process-wide cache of Plaid JWK lookups keyed by `kid`. `None` = a recent
+/// failed lookup (negative entry). The attacker controls `kid` (it is read from
+/// the unverified JWS header), so both misses and total size must be bounded.
+fn key_cache() -> &'static Mutex<HashMap<String, (Instant, Option<Value>)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, Option<Value>)>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 async fn jwk_for_kid(client: &PlaidClient, kid: &str) -> Result<Value, VerifyError> {
-    if let Some(jwk) = key_cache().lock().unwrap().get(kid).cloned() {
-        return Ok(jwk);
+    {
+        let cache = key_cache().lock().unwrap();
+        if let Some((at, entry)) = cache.get(kid) {
+            match entry {
+                Some(jwk) if at.elapsed() < KEY_TTL => return Ok(jwk.clone()),
+                None if at.elapsed() < MISS_TTL => {
+                    return Err(VerifyError::KeyFetch("unknown kid (cached)".into()))
+                }
+                _ => {}
+            }
+        }
     }
-    let jwk = client
+    let fetched = client
         .webhook_verification_key_get(kid)
         .await
-        .map_err(|e| VerifyError::KeyFetch(e.to_string()))?;
-    key_cache()
-        .lock()
-        .unwrap()
-        .insert(kid.to_string(), jwk.clone());
-    Ok(jwk)
+        .map_err(|e| VerifyError::KeyFetch(e.to_string()));
+    let mut cache = key_cache().lock().unwrap();
+    if cache.len() >= MAX_ENTRIES && !cache.contains_key(kid) {
+        if let Some(oldest) = cache.iter().min_by_key(|(_, (at, _))| *at).map(|(k, _)| k.clone()) {
+            cache.remove(&oldest);
+        }
+    }
+    cache.insert(kid.to_string(), (Instant::now(), fetched.as_ref().ok().cloned()));
+    fetched
 }
 
 /// Verify the `Plaid-Verification` JWS over `body`. Returns `Ok(())` only when

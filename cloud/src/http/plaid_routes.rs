@@ -71,6 +71,13 @@ async fn webhook(
 /// are captured server-side with the request_id Plaid support needs.
 async fn link_event(body: String) -> Json<Value> {
     let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    // Unauthenticated endpoint: the body is attacker-controllable text. Strip
+    // control chars (log-line forgery) and truncate before it reaches the log.
+    let payload: String = body
+        .chars()
+        .filter(|c| !c.is_control() || *c == ' ')
+        .take(2000)
+        .collect();
     tracing::warn!(
         kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("event"),
         error_code = v.get("error_code").and_then(|x| x.as_str()).unwrap_or(""),
@@ -78,7 +85,7 @@ async fn link_event(body: String) -> Json<Value> {
         request_id = v.get("request_id").and_then(|x| x.as_str()).unwrap_or(""),
         link_session_id = v.get("link_session_id").and_then(|x| x.as_str()).unwrap_or(""),
         institution = v.get("institution_name").and_then(|x| x.as_str()).unwrap_or(""),
-        payload = %body,
+        payload = %payload,
         "plaid link event"
     );
     Json(serde_json::json!({ "status": "ok" }))

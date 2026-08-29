@@ -22,6 +22,23 @@
   <div><h1>Transactions</h1><div class="subtitle">{{ rows.len() }} lines · all journal-line activity</div></div>
 </div>
 
+<form method="get" action="/app/transactions" class="card"
+      style="margin-bottom: var(--gap); display: flex; gap: 8px; align-items: center; padding: 10px 12px;"
+      onsubmit="var b = this.querySelector('button'); b.textContent = 'Searching…'; b.style.opacity = '.6';">
+  <span aria-hidden="true" title="AI search">✨</span>
+  <input type="text" name="ai" value="{{ ai_query }}" autocomplete="off"
+         style="flex: 1; padding: 8px 10px; border: 1px solid var(--border-strong, #ccc); border-radius: 6px; font-size: 13px;"
+         placeholder='AI search — describe what you&#39;re looking for: "software subscriptions over $100 last year", "money we sent to the landlord in March", "largest cash outflows in 2024"…'
+         title="Describes-what-you-mean search: AI turns your sentence into the filters below.">
+  <button type="submit" class="btn btn-primary">AI search</button>
+</form>
+{% match ai_note %}{% when Some with (note) %}
+<div class="card" style="margin-bottom: var(--gap); padding: 10px 12px; font-size: 13px;">
+  ✨ {{ note }}
+  <span class="muted">The filters below were set from your search — tweak them and hit Apply to refine.</span>
+</div>
+{% when None %}{% endmatch %}
+
 <form id="txfilter" method="get" action="/app/transactions" class="card" style="margin-bottom: var(--gap);" data-remember="transactions">
   <div class="form-row" style="grid-template-columns: repeat(5, 1fr); align-items: end;">
     <label class="field"><span class="label-text">Preset</span><select onchange="datePreset(this)" title="Date presets">
@@ -84,7 +101,7 @@
     </label>
     <label class="field"><span class="label-text">Min amount</span><input type="text" name="min_amount" value="{{ min_amount_str }}" placeholder="$ min" inputmode="decimal" style="width: 90px;"></label>
     <label class="field"><span class="label-text">Max amount</span><input type="text" name="max_amount" value="{{ max_amount_str }}" placeholder="$ max" inputmode="decimal" style="width: 90px;"></label>
-    <label class="field"><span class="label-text">Search</span><input type="text" name="search" value="{{ search.as_deref().unwrap_or("") }}" placeholder="keyword: memo, vendor, account, ref…" title="Searches the memo, reference, category, account name/number, and vendor"></label>
+    <label class="field"><span class="label-text">Search</span><input type="text" name="search" value="{{ search.as_deref().unwrap_or("") }}" placeholder="keyword: memo, vendor, account, ref…" title="Searches the memo, reference, category, account name/number, and vendor. Separate terms with | to match any of them (github | adobe | aws)."></label>
     <label class="field"><span class="label-text">Sort by</span>
       <select name="sort" onchange="if(window.saveFilters)saveFilters(this.form); this.form.submit();">
         <option value="date_desc" {% if selected_sort == "date_desc" %}selected{% endif %}>Date (newest first)</option>

@@ -220,6 +220,22 @@ pub async fn get_form(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<Op
     Ok(row.map(form_row))
 }
 
+/// The stored fill spec (`fields`) for one form, tenant-scoped.
+async fn get_form_fields(pool: &PgPool, company_id: Uuid, id: Uuid) -> AppResult<Value> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = sqlx::Acquire::begin(&mut conn).await?;
+    set_tenant(&mut tx, company_id).await?;
+    let v: Value = sqlx::query_scalar(
+        "SELECT COALESCE(fields, '{}'::jsonb) FROM tax_forms WHERE id = $1 AND company_id = $2",
+    )
+    .bind(id)
+    .bind(company_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(v)
+}
+
 async fn update_status(
     pool: &PgPool,
     company_id: Uuid,
@@ -250,14 +266,10 @@ pub async fn review_form_by_id(
     model: &str,
 ) -> AppResult<review::FormReview> {
     let form = get_form(pool, company_id, id).await?.ok_or(AppError::NotFound)?;
-    // intended values = the booking-derived fill spec applied to this form
-    let spec: Value = sqlx::query_scalar::<_, Value>(
-        "SELECT COALESCE(fields, '{}'::jsonb) FROM tax_forms WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .unwrap_or_else(|_| json!({}));
+    // intended values = the booking-derived fill spec applied to this form.
+    // This read must fail closed: an empty spec would make the review pass
+    // vacuously and open the approve gate on an error.
+    let spec: Value = get_form_fields(pool, company_id, id).await?;
     // optional field -> line-label map for sharper judgments
     let specs_dir = std::env::var("TAX_FORMSPECS_DIR")
         .unwrap_or_else(|_| "/usr/local/lib/accountir/tax/formspecs".to_string());
@@ -584,7 +596,13 @@ pub async fn fetch_form(
         )));
     }
     let url = format!("https://www.irs.gov/pub/irs-pdf/{form_code}.pdf");
-    let resp = reqwest::get(&url)
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    let resp = client
+        .get(&url)
+        .send()
         .await
         .map_err(|e| AppError::BadRequest(format!("irs.gov fetch failed: {e}")))?;
     if !resp.status().is_success() {
@@ -597,6 +615,9 @@ pub async fn fetch_form(
         .bytes()
         .await
         .map_err(|e| AppError::BadRequest(format!("irs.gov read failed: {e}")))?;
+    if bytes.len() > 30 * 1024 * 1024 {
+        return Err(AppError::BadRequest("irs.gov response too large".to_string()));
+    }
     if !bytes.starts_with(b"%PDF") {
         return Err(AppError::BadRequest("irs.gov did not return a PDF".to_string()));
     }

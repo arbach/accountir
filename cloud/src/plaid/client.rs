@@ -28,7 +28,12 @@ impl PlaidClient {
     pub fn new(config: PlaidConfig) -> Self {
         Self {
             config,
-            http: reqwest::Client::new(),
+            // Bounded so a hung Plaid call can't pin a request task forever
+            // (statement/asset-report fetches are the slowest legitimate calls).
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .unwrap_or_default(),
         }
     }
 

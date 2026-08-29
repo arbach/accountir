@@ -125,7 +125,7 @@ async fn extract_text(bytes: &[u8]) -> Result<String, String> {
 }
 
 /// Call the agent daemon's stateless /oneshot endpoint and parse a JSON object.
-async fn oneshot_json(system: &str, prompt: &str) -> Result<Value, String> {
+pub(crate) async fn oneshot_json(system: &str, prompt: &str) -> Result<Value, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
