@@ -292,6 +292,11 @@ fn format_event_summary(event: &crate::events::types::Event) -> String {
                 widgets::truncate(reason, 30)
             )
         }
+        Event::JournalEntryMemoUpdated {
+            entry_id, new_memo, ..
+        } => {
+            format!("Updated memo on {} to '{}'", entry_id, new_memo)
+        }
         Event::JournalEntryAnnotated {
             entry_id,
             annotation,

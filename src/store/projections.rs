@@ -199,6 +199,14 @@ impl<'a> Projector<'a> {
                     params![entry_id],
                 )?;
             }
+            Event::JournalEntryMemoUpdated {
+                entry_id, new_memo, ..
+            } => {
+                self.conn.execute(
+                    "UPDATE journal_entries SET memo = ?1 WHERE id = ?2",
+                    params![new_memo, entry_id],
+                )?;
+            }
             Event::JournalEntryAnnotated {
                 entry_id: _,
                 annotation: _,
