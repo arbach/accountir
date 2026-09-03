@@ -29,6 +29,7 @@ An **event-sourced accounting** system with three cooperating parts:
 | **Lob** | accountir-cloud | physical mail / print | `LOB_API_KEY` |
 | **Google OAuth** (oauth2-proxy) | cloud | login | `/etc/oauth2-proxy/oauth2-proxy.cfg` |
 | **Anthropic Claude CLI** | accountir-agentd | AI agent sessions | uses `ubuntu`'s Claude auth (`HOME=/home/ubuntu`); `AGENT_MODEL`, `AGENT_MCP_URL` |
+| **Coinbase** (CDP API) | accountir-cloud | company crypto account pull + reconcile | per-company Ed25519 key in `coinbase_connections` table (source: `pass coinbase/<company>/…`); sync via `maint_coinbase` bin |
 
 > Plaid access tokens are encrypted at rest with `PLAID_TOKEN_ENC_KEY` — **migrate that key or every linked bank connection becomes undecryptable.**
 

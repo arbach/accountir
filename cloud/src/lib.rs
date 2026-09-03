@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod auth;
+pub mod coinbase;
 pub mod commands;
 pub mod config;
 pub mod db;
