@@ -340,6 +340,7 @@ fn is_signable(form_code: &str) -> bool {
     matches!(
         form_code,
         "f1040" | "il1040" | "f1120" | "f1120s" | "f1065" | "il1120" | "il1120st" | "f8832"
+            | "f8822" | "f8822b"
     )
 }
 
@@ -361,6 +362,17 @@ fn signature_anchor(form_code: &str) -> SignAnchor {
         || form_code.starts_with("il1120")
     {
         return SignAnchor { page: 0, x: 112.0, y: 86.0, w: 150.0, date_x: 360.0, date_y: 92.0 };
+    }
+    // 8822-B (business address change) signs mid-page-1 under Part 10; the
+    // owner line sits above the "Signature of owner, officer, or representative"
+    // label. Calibrated against the Rev-12/2019 PDF.
+    if form_code == "f8822b" {
+        return SignAnchor { page: 0, x: 95.0, y: 278.0, w: 140.0, date_x: 458.0, date_y: 282.0 };
+    }
+    // 8822 (personal address change): "Your signature" line on page 1; a joint
+    // filer's spouse must still sign the spouse line by hand.
+    if form_code == "f8822" {
+        return SignAnchor { page: 0, x: 86.0, y: 172.0, w: 130.0, date_x: 276.0, date_y: 175.0 };
     }
     // Fallback: bottom-left of the last page (calibrate per form as needed).
     SignAnchor { page: -1, x: 112.0, y: 86.0, w: 150.0, date_x: 360.0, date_y: 92.0 }
@@ -408,12 +420,23 @@ pub async fn sign_form(
     let spec_path = std::env::temp_dir().join(format!("taxsig-{id}.json"));
     std::fs::write(&spec_path, serde_json::to_vec(&spec).unwrap_or_default())
         .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
-    let out_path = format!("{}.signed.pdf", form.file_path);
-    let res = run_taxpdf(&["stamp", &form.file_path, spec_path.to_str().unwrap_or_default(), &out_path]);
+    // Stamp the BASE, not just the visible file: the editor recomposes the
+    // visible PDF from base + annotations on every save, so a signature
+    // stamped only on the visible file would vanish at the next edit.
+    let base = ensure_base(&form.file_path)?;
+    let out_path = format!("{}.signed.pdf", base);
+    let res = run_taxpdf(&["stamp", &base, spec_path.to_str().unwrap_or_default(), &out_path]);
     let _ = std::fs::remove_file(&sig_path);
     let _ = std::fs::remove_file(&spec_path);
     res.map_err(AppError::BadRequest)?;
-    std::fs::rename(&out_path, &form.file_path).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    std::fs::rename(&out_path, &base).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    // Rebuild the visible file from the newly signed base + any annotations.
+    let annotations = get_annotations(pool, company_id, id).await?;
+    let sig_tmp = std::env::temp_dir().join(format!("taxsig-c-{id}.png"));
+    std::fs::write(&sig_tmp, signature_png).map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    let composed = compose(&form.file_path, &annotations, sig_tmp.to_str());
+    let _ = std::fs::remove_file(&sig_tmp);
+    composed?;
 
     let mut conn = pool.acquire().await?;
     let mut tx = sqlx::Acquire::begin(&mut conn).await?;
