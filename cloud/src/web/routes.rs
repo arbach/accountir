@@ -128,6 +128,7 @@ pub fn router() -> Router<AppState> {
         .route("/app/reports/income-statement", get(report_income))
         .route("/app/reports/balance-sheet", get(report_balance_sheet))
         .route("/app/reports/cash-flow", get(report_cash_flow))
+        .route("/app/reports/debt-ledger", get(report_debt_ledger))
         .route("/app/documents", get(documents_list))
         .route(
             "/app/documents/upload",
@@ -387,6 +388,18 @@ struct ReportIncomeTpl {
     flash_kind: Option<String>,
     nav: NavCtx,
     report: queries::IncomeStatement,
+    company_name: String,
+    generated_on: String,
+}
+
+#[derive(Template)]
+#[template(path = "report_debt.html")]
+struct ReportDebtTpl {
+    user_email: Option<String>,
+    flash: Option<String>,
+    flash_kind: Option<String>,
+    nav: NavCtx,
+    report: queries::DebtLedger,
     company_name: String,
     generated_on: String,
 }
@@ -4286,6 +4299,53 @@ fn default_year_range() -> (NaiveDate, NaiveDate) {
     (start, today)
 }
 
+async fn report_debt_ledger(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    axum::extract::Query(q): axum::extract::Query<DateRangeQuery>,
+) -> Response {
+    let user = match require_user(&state, &jar).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let company_id = match active_company(&state, &jar, user.id).await {
+        Some(c) => c,
+        None => return forbidden(),
+    };
+    let (default_start, default_end) = default_year_range();
+    let start = q
+        .start
+        .as_deref()
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .unwrap_or(default_start);
+    let end = q
+        .end
+        .as_deref()
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .unwrap_or(default_end);
+    let report = queries::debt_ledger(&state.pool, company_id, start, end)
+        .await
+        .unwrap_or_else(|_| queries::DebtLedger {
+            start,
+            end,
+            payables: vec![],
+            receivables: vec![],
+            total_payable_cents: 0,
+            total_receivable_cents: 0,
+        });
+    let company_name = lookup_company_name(&state, company_id).await;
+    render(ReportDebtTpl {
+        user_email: Some(user.email),
+        flash: None,
+        flash_kind: None,
+        nav: build_nav(&state, &jar, user.id).await,
+        report,
+        company_name,
+        generated_on: generated_on_str(),
+    })
+}
+
+
 async fn report_income(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -5341,7 +5401,7 @@ async fn invoice_send(
     };
     if !state.email.is_configured() {
         return (StatusCode::SERVICE_UNAVAILABLE,
-            "email not configured. Set RESEND_API_KEY env var. Public link is in the invoice detail page.")
+            "email not configured. Set GMAIL_TOKEN_FILE (or GMAIL_* / RESEND_API_KEY) in the service env. Public link is in the invoice detail page.")
             .into_response();
     }
     let company_name = queries::get_company(&state.pool, company_id).await

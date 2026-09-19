@@ -3184,3 +3184,182 @@ pub async fn list_revenue_accounts(pool: &PgPool, company_id: Uuid) -> AppResult
         display: format!("{} — {}", r.get::<String, _>(1), r.get::<String, _>(2)),
     }).collect())
 }
+
+// ─────────────────────────────── Debt ledger ───────────────────────────────
+//
+// Schedule of borrowings, intercompany balances, and loans receivable: every
+// transaction that draws or repays debt, per account, with the outstanding
+// balance owed to (or by) each counterparty. Accounts are picked dynamically
+// by name/type so newly created loan accounts appear without code changes.
+
+#[derive(Debug, Clone)]
+pub struct DebtTxn {
+    pub date: NaiveDate,
+    pub memo: String,
+    pub kind: &'static str, // Loan proceeds | Principal repayment | Advance made | Repayment received
+    pub amount_cents: i64,  // always positive
+    pub running_cents: i64, // outstanding after this transaction (in the account's owed direction)
+}
+impl DebtTxn {
+    pub fn amount_display(&self) -> String { format_cents(self.amount_cents) }
+    pub fn running_display(&self) -> String { format_cents(self.running_cents) }
+}
+
+#[derive(Debug, Clone)]
+pub struct DebtAccount {
+    pub account_id: Uuid,
+    pub account_number: String,
+    pub name: String,
+    pub is_payable: bool,       // liability (we owe them) vs asset (they owe us)
+    pub opening_cents: i64,     // outstanding at period start
+    pub proceeds_cents: i64,    // liability: new borrowings; asset: advances made
+    pub repayments_cents: i64,  // liability: principal repaid; asset: repayments received
+    pub closing_cents: i64,     // outstanding at period end
+    pub txns: Vec<DebtTxn>,
+}
+impl DebtAccount {
+    pub fn opening_display(&self) -> String { format_cents(self.opening_cents) }
+    pub fn proceeds_display(&self) -> String { format_cents(self.proceeds_cents) }
+    pub fn repayments_display(&self) -> String { format_cents(self.repayments_cents) }
+    pub fn closing_display(&self) -> String { format_cents(self.closing_cents) }
+    pub fn closing_class(&self) -> &'static str {
+        if self.closing_cents > 0 { "neg" } else if self.closing_cents < 0 { "pos" } else { "muted" }
+    }
+    /// A liability that has swung to a debit balance (or an asset to credit)
+    /// is owed in the opposite direction — surface that in plain terms.
+    pub fn direction_note(&self) -> &'static str {
+        if self.closing_cents >= 0 { "" }
+        else if self.is_payable { " (net due to us)" } else { " (net owed by us)" }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DebtLedger {
+    pub start: NaiveDate,
+    pub end: NaiveDate,
+    pub payables: Vec<DebtAccount>,
+    pub receivables: Vec<DebtAccount>,
+    pub total_payable_cents: i64,
+    pub total_receivable_cents: i64,
+}
+impl DebtLedger {
+    pub fn total_payable_display(&self) -> String { format_cents(self.total_payable_cents) }
+    pub fn total_receivable_display(&self) -> String { format_cents(self.total_receivable_cents) }
+    pub fn net_position_cents(&self) -> i64 { self.total_receivable_cents - self.total_payable_cents }
+    pub fn net_position_display(&self) -> String { format_cents(self.net_position_cents()) }
+    pub fn net_class(&self) -> &'static str {
+        if self.net_position_cents() > 0 { "pos" } else if self.net_position_cents() < 0 { "neg" } else { "muted" }
+    }
+}
+
+pub async fn debt_ledger(
+    pool: &PgPool,
+    company_id: Uuid,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> AppResult<DebtLedger> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    set_tenant(&mut tx, company_id).await?;
+
+    // The debt book: loans, notes, intercompany due to/from, shareholder loans,
+    // and loans receivable — never trade payables, cards, payroll, or clearing.
+    let accounts = sqlx::query(
+        r#"
+        SELECT a.id, a.account_number, a.name, a.account_type::text
+          FROM accounts a
+         WHERE a.company_id = $1 AND a.is_active
+           AND a.account_type::text IN ('asset','liability')
+           AND a.name ~* '(loan|due to|due from|due to/from|lender|intercompany|note payable|borrow)'
+           AND a.name !~* '(payroll|wages|sales tax|credit card|bad debt|accounts payable|clearing)'
+         ORDER BY a.account_type::text DESC, a.account_number
+        "#,
+    )
+    .bind(company_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let mut payables = Vec::new();
+    let mut receivables = Vec::new();
+    for acc in accounts {
+        let account_id: Uuid = acc.get(0);
+        let account_number: String = acc.get(1);
+        let name: String = acc.get(2);
+        let is_payable = acc.get::<String, _>(3) == "liability";
+
+        // Outstanding at period start, in the account's owed direction:
+        // liabilities are credit-normal (owed = -SUM), assets debit-normal.
+        let opening_raw: i64 = sqlx::query_scalar::<_, Option<i64>>(
+            r#"
+            SELECT SUM(jl.amount)::BIGINT
+              FROM journal_lines jl
+              JOIN journal_entries je ON je.id = jl.entry_id
+             WHERE jl.account_id = $1 AND NOT je.is_void AND je.date < $2
+            "#,
+        )
+        .bind(account_id)
+        .bind(start)
+        .fetch_one(&mut *tx)
+        .await?
+        .unwrap_or(0);
+        let opening_cents = if is_payable { -opening_raw } else { opening_raw };
+
+        let rows = sqlx::query(
+            r#"
+            SELECT je.date, COALESCE(NULLIF(jl.memo, ''), je.memo, '') AS memo,
+                   jl.amount::BIGINT
+              FROM journal_lines jl
+              JOIN journal_entries je ON je.id = jl.entry_id
+             WHERE jl.account_id = $1 AND NOT je.is_void
+               AND je.date >= $2 AND je.date <= $3
+             ORDER BY je.date, je.posted_at_event NULLS LAST, jl.id
+            "#,
+        )
+        .bind(account_id)
+        .bind(start)
+        .bind(end)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let mut running = opening_cents;
+        let mut proceeds = 0i64;
+        let mut repayments = 0i64;
+        let mut txns = Vec::with_capacity(rows.len());
+        for r in rows {
+            let amount: i64 = r.get(2);
+            if amount == 0 { continue; }
+            // Increase in the owed direction = proceeds/advance; decrease = repayment.
+            let owed_delta = if is_payable { -amount } else { amount };
+            let kind = match (is_payable, owed_delta > 0) {
+                (true, true) => "Loan proceeds",
+                (true, false) => "Principal repayment",
+                (false, true) => "Advance made",
+                (false, false) => "Repayment received",
+            };
+            if owed_delta > 0 { proceeds += owed_delta } else { repayments += -owed_delta }
+            running += owed_delta;
+            txns.push(DebtTxn {
+                date: r.get(0),
+                memo: r.get(1),
+                kind,
+                amount_cents: owed_delta.abs(),
+                running_cents: running,
+            });
+        }
+
+        let closing_cents = running;
+        // Skip accounts with no history at all in or before the period.
+        if opening_cents == 0 && txns.is_empty() { continue; }
+        let entry = DebtAccount {
+            account_id, account_number, name, is_payable,
+            opening_cents, proceeds_cents: proceeds, repayments_cents: repayments,
+            closing_cents, txns,
+        };
+        if is_payable { payables.push(entry) } else { receivables.push(entry) }
+    }
+    tx.commit().await?;
+
+    let total_payable_cents = payables.iter().map(|a| a.closing_cents).sum();
+    let total_receivable_cents = receivables.iter().map(|a| a.closing_cents).sum();
+    Ok(DebtLedger { start, end, payables, receivables, total_payable_cents, total_receivable_cents })
+}

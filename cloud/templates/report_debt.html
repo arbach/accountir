@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Debt ledger · Maven{% endblock %}
+{% block body %}
+<div class="print-header">
+  <span class="meta">Generated {{ generated_on }}</span>
+  <div class="company">{{ company_name }}</div>
+  <div>Debt ledger · {{ report.start }} → {{ report.end }}</div>
+</div>
+<div class="page-header">
+  <div><h1>Debt ledger</h1><div class="subtitle">Borrowings, intercompany balances &amp; loans receivable · {{ report.start }} → {{ report.end }}</div></div>
+  <div style="display: flex; gap: 8px; align-items: end;">
+    <form method="get" action="/app/reports/debt-ledger" class="actions" data-remember="report-debt">
+      <select onchange="datePreset(this)" title="Date presets">
+        <option value="">Preset…</option>
+        <option value="this_month">This month</option>
+        <option value="last_month">Last month</option>
+        <option value="this_quarter">This quarter</option>
+        <option value="last_quarter">Last quarter</option>
+        <option value="ytd">Year to date</option>
+        <option value="this_year">This year</option>
+        <option value="last_year">Last year</option>
+        <option value="last_12m">Last 12 months</option>
+        <option value="all">All time</option>
+      </select>
+      <input type="date" name="start" value="{{ report.start }}" style="width: 140px;">
+      <input type="date" name="end" value="{{ report.end }}" style="width: 140px;">
+      <button type="submit" class="btn btn-secondary">Update</button>
+    </form>
+    <button type="button" class="btn btn-primary" onclick="window.print()">PDF</button>
+  </div>
+</div>
+
+<div class="grid grid-3 stack">
+  <div class="card">
+    <div class="card-title">Total debt outstanding (we owe)</div>
+    <div class="card-value">{{ report.total_payable_display() }}</div>
+    <div class="card-sub">Loans payable &amp; due-to balances at {{ report.end }}</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Total receivable (owed to us)</div>
+    <div class="card-value">{{ report.total_receivable_display() }}</div>
+    <div class="card-sub">Advances &amp; due-from balances at {{ report.end }}</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Net debt position</div>
+    <div class="card-value {{ report.net_class() }}">{{ report.net_position_display() }}</div>
+    <div class="card-sub">Receivables minus obligations</div>
+  </div>
+</div>
+
+<h2 style="margin-top:24px">Summary by counterparty</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Account / counterparty</th>
+    <th class="num" style="width:130px">Opening balance</th>
+    <th class="num" style="width:130px">Proceeds / advances</th>
+    <th class="num" style="width:130px">Repayments</th>
+    <th class="num" style="width:140px">Outstanding balance</th>
+  </tr></thead>
+  <tbody>
+    <tr><td colspan="5"><strong>Obligations — amounts we owe</strong></td></tr>
+    {% if report.payables.is_empty() %}
+      <tr><td colspan="5" class="muted">No debt obligations on the books</td></tr>
+    {% else %}
+      {% for a in report.payables %}
+        <tr>
+          <td><a href="#debt-{{ a.account_number }}">{{ a.account_number }} &nbsp; {{ a.name }}</a>{{ a.direction_note() }}</td>
+          <td class="num">{{ a.opening_display() }}</td>
+          <td class="num">{{ a.proceeds_display() }}</td>
+          <td class="num">{{ a.repayments_display() }}</td>
+          <td class="num"><strong>{{ a.closing_display() }}</strong></td>
+        </tr>
+      {% endfor %}
+    {% endif %}
+    <tr><td><strong>Total obligations</strong></td><td colspan="3"></td><td class="num"><strong>{{ report.total_payable_display() }}</strong></td></tr>
+
+    <tr><td colspan="5" style="padding-top:18px"><strong>Receivables — amounts owed to us</strong></td></tr>
+    {% if report.receivables.is_empty() %}
+      <tr><td colspan="5" class="muted">No loans or advances receivable on the books</td></tr>
+    {% else %}
+      {% for a in report.receivables %}
+        <tr>
+          <td><a href="#debt-{{ a.account_number }}">{{ a.account_number }} &nbsp; {{ a.name }}</a>{{ a.direction_note() }}</td>
+          <td class="num">{{ a.opening_display() }}</td>
+          <td class="num">{{ a.proceeds_display() }}</td>
+          <td class="num">{{ a.repayments_display() }}</td>
+          <td class="num"><strong>{{ a.closing_display() }}</strong></td>
+        </tr>
+      {% endfor %}
+    {% endif %}
+    <tr><td><strong>Total receivables</strong></td><td colspan="3"></td><td class="num"><strong>{{ report.total_receivable_display() }}</strong></td></tr>
+  </tbody>
+  <tfoot>
+    <tr><td>Net debt position</td><td colspan="3"></td><td class="num {{ report.net_class() }}">{{ report.net_position_display() }}</td></tr>
+  </tfoot>
+</table>
+</div>
+
+<h2 style="margin-top:28px">Transaction detail</h2>
+{% for a in report.payables %}
+<div class="table-wrap" id="debt-{{ a.account_number }}" style="margin-bottom:18px">
+<table>
+  <thead>
+    <tr><th colspan="4">{{ a.account_number }} &nbsp; {{ a.name }} <span class="muted">— obligation</span></th></tr>
+    <tr><th style="width:110px">Date</th><th>Memo</th><th style="width:160px">Type</th><th class="num" style="width:130px">Amount</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>{{ report.start }}</td><td class="muted">Opening balance</td><td></td><td class="num">{{ a.opening_display() }}</td></tr>
+    {% for t in a.txns %}
+      <tr><td>{{ t.date }}</td><td>{{ t.memo }}</td><td>{{ t.kind }}</td><td class="num">{{ t.amount_display() }}</td></tr>
+    {% endfor %}
+  </tbody>
+  <tfoot><tr><td>{{ report.end }}</td><td>Outstanding balance</td><td></td><td class="num"><strong>{{ a.closing_display() }}</strong></td></tr></tfoot>
+</table>
+</div>
+{% endfor %}
+{% for a in report.receivables %}
+<div class="table-wrap" id="debt-{{ a.account_number }}" style="margin-bottom:18px">
+<table>
+  <thead>
+    <tr><th colspan="4">{{ a.account_number }} &nbsp; {{ a.name }} <span class="muted">— receivable</span></th></tr>
+    <tr><th style="width:110px">Date</th><th>Memo</th><th style="width:160px">Type</th><th class="num" style="width:130px">Amount</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>{{ report.start }}</td><td class="muted">Opening balance</td><td></td><td class="num">{{ a.opening_display() }}</td></tr>
+    {% for t in a.txns %}
+      <tr><td>{{ t.date }}</td><td>{{ t.memo }}</td><td>{{ t.kind }}</td><td class="num">{{ t.amount_display() }}</td></tr>
+    {% endfor %}
+  </tbody>
+  <tfoot><tr><td>{{ report.end }}</td><td>Outstanding balance</td><td></td><td class="num"><strong>{{ a.closing_display() }}</strong></td></tr></tfoot>
+</table>
+</div>
+{% endfor %}
+{% endblock %}
