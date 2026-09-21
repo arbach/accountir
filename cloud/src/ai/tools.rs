@@ -314,6 +314,22 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": { "type": "object", "properties": {} }
         }),
         json!({
+            "name": "coinbase_sync",
+            "description": "Pull the latest accounts and transactions from the company's connected Coinbase account (CDP API) into the local cache, then return each wallet's name and transaction count. Errors if this company has no Coinbase connection stored — connections are set up by the operator, not from chat.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "coinbase_transactions",
+            "description": "List the company's cached Coinbase transactions (call coinbase_sync first for fresh data): date, wallet, type (buy/sell/send/interest/…), amount, currency, USD value, counterparty address, and on-chain hash. Use for reconciling the Coinbase custody account against the books.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "since": {"type": "string", "description": "YYYY-MM-DD — only transactions on/after this date"},
+                    "limit": {"type": "integer", "description": "max rows (default 100)"}
+                }
+            }
+        }),
+        json!({
             "name": "set_address_label",
             "description": "Add or update an address-book entry mapping a wallet address (or any identifier) to a name, optional kind (contractor|lender|exchange|own|income|expense) and an optional default account_code. Use when you identify a new counterparty so future bookkeeping recognizes it.",
             "input_schema": {
@@ -403,6 +419,8 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "cash_flow" => cash_flow_tool(ctx, input).await,
         "list_transactions" => list_transactions_tool(ctx, input).await,
         "list_address_labels" => list_address_labels_tool(ctx).await,
+        "coinbase_sync" => coinbase_sync_tool(ctx).await,
+        "coinbase_transactions" => coinbase_transactions_tool(ctx, input).await,
         "set_address_label" => set_address_label_tool(ctx, input).await,
         "list_documents" => list_documents_tool(ctx).await,
         "read_document" => read_document_tool(ctx, input).await,
@@ -1233,6 +1251,69 @@ async fn post_entry_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
     .await
     {
         Ok(id) => json!({ "ok": true, "entry_id": id }),
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+
+async fn coinbase_sync_tool(ctx: &ToolContext<'_>) -> Value {
+    match crate::coinbase::sync(ctx.pool, ctx.company_id).await {
+        Ok((accounts, txs)) => json!({ "ok": true, "accounts_synced": accounts, "transactions_cached": txs }),
+        Err(e) => json!({ "error": format!("{e} — this company may have no Coinbase connection; the operator can add one with maint_coinbase") }),
+    }
+}
+
+async fn coinbase_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Value {
+    let since = input
+        .get("since")
+        .and_then(|v| v.as_str())
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let limit = input.get("limit").and_then(|v| v.as_i64()).unwrap_or(100).clamp(1, 500);
+    let mut conn = match ctx.pool.acquire().await {
+        Ok(c) => c,
+        Err(e) => return json!({ "error": format!("{e}") }),
+    };
+    let mut tx = match sqlx::Acquire::begin(&mut conn).await {
+        Ok(t) => t,
+        Err(e) => return json!({ "error": format!("{e}") }),
+    };
+    if let Err(e) = crate::store::event_store::set_tenant(&mut tx, ctx.company_id).await {
+        return json!({ "error": format!("{e}") });
+    }
+    let rows = sqlx::query(
+        "SELECT created_at, account_name, tx_type, amount::TEXT, currency, native_cents, \
+                COALESCE(counterparty,''), COALESCE(network_hash,''), status \
+           FROM coinbase_transactions \
+          WHERE company_id = $1 AND ($2::date IS NULL OR created_at::date >= $2) \
+          ORDER BY created_at DESC LIMIT $3",
+    )
+    .bind(ctx.company_id)
+    .bind(since)
+    .bind(limit)
+    .fetch_all(&mut *tx)
+    .await;
+    let _ = tx.commit().await;
+    match rows {
+        Ok(rows) => {
+            let list: Vec<Value> = rows
+                .iter()
+                .map(|r| {
+                    use sqlx::Row;
+                    json!({
+                        "at": r.get::<chrono::DateTime<chrono::Utc>, _>(0).to_rfc3339(),
+                        "wallet": r.get::<String, _>(1),
+                        "type": r.get::<String, _>(2),
+                        "amount": r.get::<String, _>(3),
+                        "currency": r.get::<String, _>(4),
+                        "usd": r.get::<i64, _>(5) as f64 / 100.0,
+                        "counterparty": r.get::<String, _>(6),
+                        "hash": r.get::<String, _>(7),
+                        "status": r.get::<String, _>(8),
+                    })
+                })
+                .collect();
+            json!({ "count": list.len(), "transactions": list })
+        }
         Err(e) => json!({ "error": format!("{e}") }),
     }
 }
