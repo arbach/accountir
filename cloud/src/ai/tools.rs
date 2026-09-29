@@ -314,6 +314,20 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": { "type": "object", "properties": {} }
         }),
         json!({
+            "name": "scan_wallet_onchain",
+            "description": "Scan a blockchain wallet address for incoming and outgoing token transfers (Ethereum, BSC, Base, Arbitrum, Polygon, Optimism), spam-filtered. Use to verify what a wallet actually sent or received when a memo names a 0x… address, to find transactions missing from the books, or to identify a counterparty. Cross-reference the results with list_address_labels. Amounts are in the asset's own units — stablecoins (USDC/USDT/DAI) are ~1 USD each.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "address": {"type": "string", "description": "0x… wallet address to scan"},
+                    "chains": {"type": "array", "items": {"type": "string"}, "description": "chains to scan, e.g. [\"ethereum\",\"bsc\"]; default scans ethereum, bsc, base, arbitrum, polygon"},
+                    "since": {"type": "string", "description": "YYYY-MM-DD — only transfers on/after this date"},
+                    "limit": {"type": "integer", "description": "max transfers to return (default 100)"}
+                },
+                "required": ["address"]
+            }
+        }),
+        json!({
             "name": "coinbase_sync",
             "description": "Pull the latest accounts and transactions from the company's connected Coinbase account (CDP API) into the local cache, then return each wallet's name and transaction count. Errors if this company has no Coinbase connection stored — connections are set up by the operator, not from chat.",
             "input_schema": { "type": "object", "properties": {} }
@@ -419,6 +433,7 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "cash_flow" => cash_flow_tool(ctx, input).await,
         "list_transactions" => list_transactions_tool(ctx, input).await,
         "list_address_labels" => list_address_labels_tool(ctx).await,
+        "scan_wallet_onchain" => scan_wallet_tool(input).await,
         "coinbase_sync" => coinbase_sync_tool(ctx).await,
         "coinbase_transactions" => coinbase_transactions_tool(ctx, input).await,
         "set_address_label" => set_address_label_tool(ctx, input).await,
@@ -1313,6 +1328,60 @@ async fn coinbase_transactions_tool(ctx: &ToolContext<'_>, input: &Value) -> Val
                 })
                 .collect();
             json!({ "count": list.len(), "transactions": list })
+        }
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+
+async fn scan_wallet_tool(input: &Value) -> Value {
+    let Some(address) = input.get("address").and_then(|v| v.as_str()) else {
+        return json!({ "error": "address required" });
+    };
+    if crate::onchain::alchemy_key().is_none() {
+        return json!({ "error": "no blockchain scanner configured (ALCHEMY_API_KEY unset)" });
+    }
+    let owned: Vec<String> = input
+        .get("chains")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let chains: Vec<&str> = if owned.is_empty() {
+        crate::onchain::DEFAULT_CHAINS.to_vec()
+    } else {
+        owned.iter().map(String::as_str).collect()
+    };
+    let since = input.get("since").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let limit = input.get("limit").and_then(|v| v.as_i64()).unwrap_or(100).clamp(1, 500) as usize;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_default();
+    match crate::onchain::scan_wallet(&client, address, &chains).await {
+        Ok(mut transfers) => {
+            if !since.is_empty() {
+                transfers.retain(|t| t.timestamp.as_deref().map(|ts| ts >= since.as_str()).unwrap_or(true));
+            }
+            transfers.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+            let total = transfers.len();
+            let list: Vec<Value> = transfers
+                .iter()
+                .take(limit)
+                .map(|t| {
+                    json!({
+                        "date": t.timestamp.as_deref().unwrap_or("").chars().take(10).collect::<String>(),
+                        "chain": t.chain,
+                        "direction": match t.direction { crate::onchain::Direction::In => "IN", _ => "OUT" },
+                        "symbol": t.symbol,
+                        "amount": t.amount,
+                        "from": t.from,
+                        "to": t.to,
+                        "tx_hash": t.tx_hash,
+                    })
+                })
+                .collect();
+            json!({ "address": address, "chains_scanned": chains, "total_found": total, "returned": list.len(), "transfers": list })
         }
         Err(e) => json!({ "error": format!("{e}") }),
     }

@@ -46,11 +46,12 @@ pub fn alchemy_key() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Chains we support via Alchemy (BSC is not on the standard plan — use the
-/// recon/Moralis path for that). Accepts common aliases.
+/// Chains we support via Alchemy. Accepts common aliases. BSC is served here
+/// too (bnb-mainnet); Moralis stays as a fallback for when a key is set.
 fn alchemy_network(chain: &str) -> Option<&'static str> {
     match chain.to_ascii_lowercase().as_str() {
         "eth" | "ethereum" | "mainnet" => Some("eth-mainnet"),
+        "bsc" | "bnb" | "binance" => Some("bnb-mainnet"),
         "polygon" | "matic" => Some("polygon-mainnet"),
         "arbitrum" | "arb" => Some("arb-mainnet"),
         "base" => Some("base-mainnet"),
@@ -120,7 +121,7 @@ pub async fn scan_wallet(
 ) -> Result<Vec<Transfer>, ScanError> {
     let mut out = Vec::new();
     for &chain in chains {
-        let mut got = if chain.eq_ignore_ascii_case("bsc") {
+        let mut got = if chain.eq_ignore_ascii_case("bsc") && moralis_key().is_some() {
             moralis_transfers(client, address, "bsc").await?
         } else if alchemy_network(chain).is_some() {
             alchemy_transfers(client, address, chain).await?
