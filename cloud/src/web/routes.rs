@@ -3377,6 +3377,10 @@ struct TaxFilingTpl {
     profile_city: String,
     profile_state: String,
     profile_zip: String,
+    profile_bank_name: String,
+    profile_bank_routing: String,
+    profile_bank_last4: String,
+    profile_bank_type: String,
     forms: Vec<crate::tax::TaxFormRow>,
     lob_configured: bool,
     /// Any form awaiting signature (status = approved).
@@ -3416,6 +3420,13 @@ async fn tax_filing(
         addr_field("state"),
         addr_field("zip"),
     );
+    let bank = profile.as_ref().and_then(|p| p.bank.clone());
+    let (profile_bank_name, profile_bank_routing, profile_bank_last4, profile_bank_type) = (
+        bank.as_ref().map(|b| b.bank_name.clone()).unwrap_or_default(),
+        bank.as_ref().map(|b| b.routing.clone()).unwrap_or_default(),
+        bank.as_ref().map(|b| b.last4.clone()).unwrap_or_default(),
+        bank.as_ref().map(|b| b.account_type.clone()).unwrap_or_else(|| "checking".into()),
+    );
     let forms = crate::tax::list_forms(&state.pool, company_id).await.unwrap_or_default();
     let nav = build_nav(&state, &jar, user.id).await;
     let (tagged_accounts, total_accounts) = queries::tagging_coverage(&state.pool, company_id).await;
@@ -3426,6 +3437,7 @@ async fn tax_filing(
         (
             Some(match cerr {
                 "no-mapping" => "No OpenTax mapping for this company yet.".to_string(),
+                "bad-bank-account" => "Bank account not saved — the routing number must be 9 digits and pass the ABA check digit. Everything else on the profile was saved.".to_string(),
                 _ => "Engine compute failed — review the ledger and tax-line tags.".to_string(),
             }),
             Some("error".to_string()),
@@ -3562,6 +3574,10 @@ async fn tax_filing(
         profile_city,
         profile_state,
         profile_zip,
+        profile_bank_name,
+        profile_bank_routing,
+        profile_bank_last4,
+        profile_bank_type,
         has_approved: forms.iter().any(|f| f.status == "approved"),
         has_signed: forms.iter().any(|f| f.mailable()),
         has_signature: crate::signature::has_signature(&state.pool, user.id).await,
@@ -3580,6 +3596,10 @@ struct TaxProfileForm {
     city: String,
     state: String,
     zip: String,
+    bank_name: Option<String>,
+    bank_routing: Option<String>,
+    bank_account: Option<String>,
+    bank_type: Option<String>,
 }
 
 async fn tax_profile_save(
@@ -3599,6 +3619,24 @@ async fn tax_profile_save(
         "line1": req.line1, "line2": req.line2.unwrap_or_default(),
         "city": req.city, "state": req.state, "zip": req.zip,
     });
+    // Bank account is optional and only rewritten when a new number is typed —
+    // the form renders a masked last-4, never the stored number.
+    let new_account = req.bank_account.as_deref().unwrap_or("").trim().to_string();
+    if !new_account.is_empty() && !new_account.contains('*') {
+        if let Err(e) = crate::tax::set_bank_account(
+            &state.pool,
+            company_id,
+            req.bank_name.as_deref().unwrap_or("").trim(),
+            req.bank_routing.as_deref().unwrap_or("").trim(),
+            &new_account,
+            req.bank_type.as_deref().unwrap_or("checking"),
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "tax bank account rejected");
+            return Redirect::to("/app/tax?cerr=bad-bank-account").into_response();
+        }
+    }
     if let Err(e) = crate::tax::set_profile(
         &state.pool,
         company_id,

@@ -79,6 +79,20 @@
       <label class="field"><span class="label-text">City</span><input type="text" name="city" value="{{ profile_city }}" required></label>
       <label class="field"><span class="label-text">State</span><input type="text" name="state" value="{{ profile_state }}" maxlength="2" required></label>
       <label class="field"><span class="label-text">ZIP</span><input type="text" name="zip" value="{{ profile_zip }}" required></label>
+    </div>
+    <div class="muted" style="font-size:12px; margin:14px 0 6px;">Refund &amp; payment account — used for direct deposit of refunds and direct debit of balances due (Form 1040 lines 35b–d, IL Step 10, 1120/1120-S refund lines). The account number is stored encrypted; only the last four digits are shown.</div>
+    <div class="grid grid-2">
+      <label class="field"><span class="label-text">Bank</span>
+        <input type="text" name="bank_name" value="{{ profile_bank_name }}" placeholder="Chase"></label>
+      <label class="field"><span class="label-text">Routing number</span>
+        <input type="text" name="bank_routing" value="{{ profile_bank_routing }}" placeholder="9 digits" maxlength="9"></label>
+      <label class="field"><span class="label-text">Account number</span>
+        <input type="text" name="bank_account" placeholder="{% if !profile_bank_last4.is_empty() %}on file — ends {{ profile_bank_last4 }}; type a new number to replace{% else %}not set{% endif %}" autocomplete="off"></label>
+      <label class="field"><span class="label-text">Account type</span>
+        <select name="bank_type">
+          <option value="checking" {% if profile_bank_type == "checking" %}selected{% endif %}>Checking</option>
+          <option value="savings" {% if profile_bank_type == "savings" %}selected{% endif %}>Savings</option>
+        </select></label>
       <div style="padding-bottom: 12px;"><button type="submit" class="btn btn-primary">Save profile</button></div>
     </div>
   </form>
