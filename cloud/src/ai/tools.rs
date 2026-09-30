@@ -314,6 +314,11 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": { "type": "object", "properties": {} }
         }),
         json!({
+            "name": "get_refund_bank_account",
+            "description": "Return the entity's stored direct-deposit bank account (bank, routing number, FULL account number, checking/savings) for filling a refund or direct-debit block on a return (1040 35b/c/d, IL Step 10, 1120/1120-S). get_tax_profile only shows a masked last-4; call this when you are actually filling those fields. If nothing is stored, ask the owner and have them save it — never guess an account number.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
             "name": "scan_wallet_onchain",
             "description": "Scan a blockchain wallet address for incoming and outgoing token transfers (Ethereum, BSC, Base, Arbitrum, Polygon, Optimism), spam-filtered. Use to verify what a wallet actually sent or received when a memo names a 0x… address, to find transactions missing from the books, or to identify a counterparty. Cross-reference the results with list_address_labels. Amounts are in the asset's own units — stablecoins (USDC/USDT/DAI) are ~1 USD each.",
             "input_schema": {
@@ -433,6 +438,7 @@ pub async fn execute(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value 
         "cash_flow" => cash_flow_tool(ctx, input).await,
         "list_transactions" => list_transactions_tool(ctx, input).await,
         "list_address_labels" => list_address_labels_tool(ctx).await,
+        "get_refund_bank_account" => get_refund_bank_tool(ctx).await,
         "scan_wallet_onchain" => scan_wallet_tool(input).await,
         "coinbase_sync" => coinbase_sync_tool(ctx).await,
         "coinbase_transactions" => coinbase_transactions_tool(ctx, input).await,
@@ -935,6 +941,14 @@ async fn get_tax_profile_tool(ctx: &ToolContext<'_>) -> Value {
         Ok(Some(p)) => json!({
             "entity_type": p.entity_type, "legal_name": p.legal_name,
             "ein": p.ein, "address": p.address,
+            "refund_bank_account": match &p.bank {
+                Some(b) => json!({
+                    "bank_name": b.bank_name, "routing_number": b.routing,
+                    "account_last4": b.last4, "account_type": b.account_type,
+                    "note": "account number is stored encrypted — call get_refund_bank_account when filling a refund/direct-debit block",
+                }),
+                None => json!(null),
+            },
         }),
         Ok(None) => json!({ "profile": null, "note": "no tax profile yet — ask the user and call set_tax_profile" }),
         Err(e) => json!({ "error": format!("{e}") }),
@@ -1383,6 +1397,22 @@ async fn scan_wallet_tool(input: &Value) -> Value {
                 .collect();
             json!({ "address": address, "chains_scanned": chains, "total_found": total, "returned": list.len(), "transfers": list })
         }
+        Err(e) => json!({ "error": format!("{e}") }),
+    }
+}
+
+
+async fn get_refund_bank_tool(ctx: &ToolContext<'_>) -> Value {
+    match crate::tax::get_bank_account(ctx.pool, ctx.company_id).await {
+        Ok(Some(b)) => json!({
+            "bank_name": b.bank_name,
+            "routing_number": b.routing,
+            "account_number": b.account_number,
+            "account_type": b.account_type,
+        }),
+        Ok(None) => json!({
+            "error": "no bank account on file for this entity — ask the owner for routing number, account number and checking/savings, then have it saved to the tax profile"
+        }),
         Err(e) => json!({ "error": format!("{e}") }),
     }
 }

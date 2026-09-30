@@ -36,24 +36,153 @@ pub struct TaxProfile {
     pub legal_name: String,
     pub ein: String,
     pub address: Value,
+    /// Refund / payment bank account. `account_number` is only populated by
+    /// `get_bank_account`; `get_profile` leaves it None and carries the last-4.
+    pub bank: Option<BankAccount>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BankAccount {
+    pub bank_name: String,
+    pub routing: String,
+    pub last4: String,
+    pub account_type: String,
+    pub account_number: Option<String>,
+}
+
+/// AES-256-GCM key for at-rest secrets, shared with the Plaid token store.
+fn data_key() -> Result<[u8; 32], String> {
+    let hex_key = std::env::var("PLAID_TOKEN_ENC_KEY")
+        .map_err(|_| "PLAID_TOKEN_ENC_KEY not set — cannot read/write bank details".to_string())?;
+    let bytes = hex::decode(hex_key.trim()).map_err(|e| format!("bad enc key hex: {e}"))?;
+    if bytes.len() != 32 {
+        return Err("enc key must be 32 bytes".into());
+    }
+    let mut k = [0u8; 32];
+    k.copy_from_slice(&bytes);
+    Ok(k)
+}
+
+/// Store (or replace) the entity's refund/payment bank account. The account
+/// number is encrypted before it touches the database.
+pub async fn set_bank_account(
+    pool: &PgPool,
+    company_id: Uuid,
+    bank_name: &str,
+    routing: &str,
+    account_number: &str,
+    account_type: &str,
+) -> AppResult<()> {
+    let digits: String = account_number.chars().filter(|c| c.is_ascii_digit()).collect();
+    let routing_digits: String = routing.chars().filter(|c| c.is_ascii_digit()).collect();
+    if routing_digits.len() != 9 {
+        return Err(AppError::BadRequest("routing number must be 9 digits".into()));
+    }
+    if !aba_checksum_ok(&routing_digits) {
+        return Err(AppError::BadRequest(format!(
+            "routing number {routing_digits} fails the ABA checksum — re-check it against the check or bank record"
+        )));
+    }
+    if digits.len() < 4 {
+        return Err(AppError::BadRequest("account number too short".into()));
+    }
+    let key = data_key().map_err(AppError::BadRequest)?;
+    let cipher = crate::plaid::crypto::TokenCipher::new(&key);
+    let (enc, nonce) = cipher
+        .encrypt(&digits)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("encrypt bank account: {e}")))?;
+    let last4 = digits[digits.len() - 4..].to_string();
+    let acct_type = if account_type.eq_ignore_ascii_case("savings") { "savings" } else { "checking" };
+
+    let mut conn = pool.acquire().await?;
+    let mut tx = sqlx::Acquire::begin(&mut conn).await?;
+    set_tenant(&mut tx, company_id).await?;
+    sqlx::query(
+        "UPDATE tax_profiles SET bank_name=$2, bank_routing=$3, bank_account_last4=$4,
+            bank_account_type=$5, bank_account_enc=$6, bank_account_nonce=$7, updated_at=now()
+         WHERE company_id=$1",
+    )
+    .bind(company_id)
+    .bind(bank_name)
+    .bind(&routing_digits)
+    .bind(&last4)
+    .bind(acct_type)
+    .bind(&enc)
+    .bind(&nonce[..])
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// ABA routing-number check digit (weights 3,7,1 repeating).
+fn aba_checksum_ok(r: &str) -> bool {
+    let d: Vec<u32> = r.chars().filter_map(|c| c.to_digit(10)).collect();
+    if d.len() != 9 {
+        return false;
+    }
+    let w = [3, 7, 1, 3, 7, 1, 3, 7, 1];
+    (0..9).map(|i| d[i] * w[i]).sum::<u32>() % 10 == 0
+}
+
+/// Full bank details including the decrypted account number — only for filling
+/// a refund/direct-debit block on a return.
+pub async fn get_bank_account(pool: &PgPool, company_id: Uuid) -> AppResult<Option<BankAccount>> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = sqlx::Acquire::begin(&mut conn).await?;
+    set_tenant(&mut tx, company_id).await?;
+    let row: Option<(Option<String>, Option<String>, Option<String>, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>)> =
+        sqlx::query_as(
+            "SELECT bank_name, bank_routing, bank_account_last4, bank_account_type,
+                    bank_account_enc, bank_account_nonce FROM tax_profiles WHERE company_id=$1",
+        )
+        .bind(company_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    let Some((name, routing, last4, acct_type, enc, nonce)) = row else { return Ok(None) };
+    let (Some(routing), Some(last4), Some(enc), Some(nonce)) = (routing, last4, enc, nonce) else {
+        return Ok(None);
+    };
+    let key = data_key().map_err(AppError::BadRequest)?;
+    let cipher = crate::plaid::crypto::TokenCipher::new(&key);
+    let number = cipher
+        .decrypt(&enc, &nonce)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("decrypt bank account: {e}")))?;
+    Ok(Some(BankAccount {
+        bank_name: name.unwrap_or_default(),
+        routing,
+        last4,
+        account_type: acct_type.unwrap_or_else(|| "checking".into()),
+        account_number: Some(number),
+    }))
 }
 
 pub async fn get_profile(pool: &PgPool, company_id: Uuid) -> AppResult<Option<TaxProfile>> {
     let mut conn = pool.acquire().await?;
     let mut tx = sqlx::Acquire::begin(&mut conn).await?;
     set_tenant(&mut tx, company_id).await?;
-    let row: Option<(String, String, String, Value)> = sqlx::query_as(
-        "SELECT entity_type, legal_name, ein, address FROM tax_profiles WHERE company_id = $1",
-    )
-    .bind(company_id)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let row: Option<(String, String, String, Value, Option<String>, Option<String>, Option<String>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT entity_type, legal_name, ein, address, bank_name, bank_routing,
+                    bank_account_last4, bank_account_type FROM tax_profiles WHERE company_id = $1",
+        )
+        .bind(company_id)
+        .fetch_optional(&mut *tx)
+        .await?;
     tx.commit().await?;
-    Ok(row.map(|(entity_type, legal_name, ein, address)| TaxProfile {
-        entity_type,
-        legal_name,
-        ein,
-        address,
+    Ok(row.map(|(entity_type, legal_name, ein, address, bname, routing, last4, atype)| {
+        let bank = match (routing, last4) {
+            (Some(routing), Some(last4)) => Some(BankAccount {
+                bank_name: bname.unwrap_or_default(),
+                routing,
+                last4,
+                account_type: atype.unwrap_or_else(|| "checking".into()),
+                account_number: None,
+            }),
+            _ => None,
+        };
+        TaxProfile { entity_type, legal_name, ein, address, bank }
     }))
 }
 
