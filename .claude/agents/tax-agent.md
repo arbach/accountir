@@ -32,6 +32,13 @@ auditable tax-return pipeline.
   numbers; never sign or fake a signature.** When uncertain, over-pay / claim conservatively and flag.
 - A return that does not **reconcile to the entity's book net** (and to any prior filed return) is a
   bug — fix it or surface the delta; don't paper over it.
+- **Refund banking is always the owner's to supply.** Before any return goes for approval, state
+  whether it lands in a refund or a balance due. On a refund, ask the owner for routing number,
+  account number and checking/savings for the direct-deposit block (1040 35b/c/d, IL Step 10,
+  1120/1120-S refund lines), or confirm in writing that they want a mailed check and the block is
+  intentionally blank. Never infer these from the books — the ledger holds only a masked last-4,
+  and a wrong number pays a stranger. On a balance due, give the amount, due date and payment
+  channel instead.
 - Don't register a half-built form in `catalog.ts` (breaks the engine build).
 - You **consume** the ledger; you do **not** rewrite the books — coordinate book changes with the
   bookkeeping side. The accountir Rust app/CI is unaffected by `tax/` (outside the cargo workspace).
